@@ -6,6 +6,13 @@ project memory; this file is the short "what changed" for each build.
 > Builds: TMUXor ships as a single **public** `.ehpk` — it bakes no secrets, so every user
 > enters their own backend URL + token on the app's Setup screen.
 
+## 1.0.6 — 2026-06-28
+- **Fix: option prompts now actually show up.** Claude's Bash / edit permission prompts ("Do you
+  want to proceed? ❯ 1. Yes / 2. No …") weren't being detected — only AskUserQuestion-style ones
+  were — so the glasses showed the conversation (bash code blocks) instead of the live question +
+  choices. Now any prompt with the ❯ cursor on a numbered option is recognized, and the read view
+  opens right at the question + options (the command/context scrolls up).
+
 ## 1.0.5 — 2026-06-28
 - **Fix: multi-option prompts (AskUserQuestion) read clearly.** The read view had kept each
   option's description but dropped the "1. … / 2. …" lines above them, so the descriptions looked

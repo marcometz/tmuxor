@@ -103,7 +103,6 @@ export async function refresh() {
 
 // --- detect an interactive option menu in the captured screen ---
 function parseMenu(raw: string[]): MenuState | null {
-  if (!raw.some((l) => /to navigate|to select|✔ ?submit|esc to cancel/i.test(l))) return null
   const options: MenuOption[] = []
   let multi = false
   for (const l of raw) {
@@ -114,6 +113,12 @@ function parseMenu(raw: string[]): MenuState | null {
     }
   }
   if (options.length < 2) return null
+  // It IS an interactive prompt if either the TUI cursor (❯/›) sits on a numbered option — this
+  // catches Claude's Bash/edit permission prompts, which have NO footer hint — OR there's an
+  // AskUserQuestion-style footer. Without one of these it's just a numbered list in prose, not a menu.
+  const cursor = raw.some((l) => /^\s*[❯›]\s*\d+[.)]/.test(l))
+  const footer = raw.some((l) => /to navigate|to select|✔ ?submit|esc to cancel/i.test(l))
+  if (!cursor && !footer) return null
   const q = (raw.find((l) => l.includes('?') && l.trim().length > 8) || '').trim().replace(/^[❯>›*\s]+/, '')
   return { question: q, options, multi, cursorIndex: Math.max(0, options.findIndex((o) => o.current)) }
 }
@@ -293,9 +298,15 @@ function updateLive(text: string) {
   const reRender = state.working && activity !== state.activity
   const patch: Partial<AppState> = { menu, activity }
   if (menu) {
-    patch.menuBody = menuBodyLines(raw)
-    // a NEW prompt (menu just appeared, or its question changed) -> start by READING from the top
-    if (!state.menu || state.menu.question !== menu.question) { patch.menuPhase = 'read'; patch.menuScroll = 0 }
+    const body = menuBodyLines(raw)
+    patch.menuBody = body
+    // a NEW prompt (menu just appeared, or its question changed) -> open READ anchored at the
+    // question + options (the actionable part); the command/diff context sits above (scroll up to it).
+    if (!state.menu || state.menu.question !== menu.question) {
+      patch.menuPhase = 'read'
+      const optIdx = body.findIndex((l) => /^\s*(❯|›|>|\*)?\s*\d+[.)]\s/.test(l))
+      patch.menuScroll = optIdx > 0 ? Math.max(0, optIdx - 3) : 0
+    }
   }
   set(patch)
   if (reRender) buildView()
