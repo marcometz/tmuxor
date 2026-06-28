@@ -379,10 +379,11 @@ export function jumpToLatest(): boolean {
   if (state.atBottom) return false   // already following the live edge -> leave to the list
   const ms = maxScroll(state.lines.length, VIEW_SLOTS)
   const promptPos = lastPromptIndex(state.lines)
-  // scrolled up ABOVE the latest prompt -> bring that prompt to the TOP. scroll can exceed the
-  // normal bottom (ms) here so even a short last exchange lands prompt-first; the view display +
-  // buildView allow this over-scroll. Otherwise jump to the live edge (bottom).
-  if (state.scroll < promptPos) set({ scroll: promptPos, atBottom: false })
+  // NOT already showing the latest prompt at the top (whether you scrolled up above it OR down
+  // into its answer) -> bring that prompt to the TOP. scroll may exceed the normal bottom (ms) so
+  // even a short last exchange lands prompt-first (the view display + buildView allow this
+  // over-scroll). Already on the prompt -> jump to the live edge (bottom).
+  if (state.scroll !== promptPos) set({ scroll: promptPos, atBottom: false })
   else set({ scroll: ms, atBottom: true })
   return true
 }

@@ -6,6 +6,12 @@ project memory; this file is the short "what changed" for each build.
 > Builds: TMUXor ships as a single **public** `.ehpk` — it bakes no secrets, so every user
 > enters their own backend URL + token on the app's Setup screen.
 
+## 1.0.3 — 2026-06-28
+- **Fix (for real this time): double-tap brings you to the latest prompt from anywhere.** 1.0.2
+  only worked if you'd scrolled *above* the prompt; while reading the *answer* (below the prompt)
+  it still went to the bottom. Now double-tap puts the latest prompt at the top whenever you're not
+  already on it — then the bottom, then back to the list.
+
 ## 1.0.2 — 2026-06-28
 - **Fix: double-tap lands on the latest prompt.** When you'd scrolled up, double-tap jumped to the
   bottom instead of the recent prompt whenever that prompt was near the end of the conversation.
