@@ -1,0 +1,24 @@
+# Secrets — NEVER commit
+glasses/.env
+glasses/.env.*
+*.env
+!*.env.example
+
+# Build artifacts (distribute the public .ehpk via the Even Hub / GitHub Releases,
+# and the personal .ehpk contains your token — never commit either)
+*.ehpk
+glasses/dist/
+glasses/dist-*/
+glasses/node_modules/
+
+# Python
+**/__pycache__/
+*.pyc
+
+# Internal / dev notes — not part of the public repo
+CLAUDE.md
+CONDUCTOR.md
+REVIEW.md
+
+# OS
+.DS_Store

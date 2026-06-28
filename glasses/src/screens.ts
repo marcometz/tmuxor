@@ -1,0 +1,266 @@
+// Control state machine: list <-> detail; detail phases view/listening/confirm.
+// In 'view', if the pane is showing an option menu, render a clean selectable list (menu mode).
+import { line, glassHeader, type DisplayData } from 'even-toolkit/types'
+import { buildScrollableList } from 'even-toolkit/glass-display-builders'
+import { moveHighlight } from 'even-toolkit/glass-nav'
+import { truncateGlassText } from 'even-toolkit/pretext'
+import { createGlassScreenRouter, type GlassScreen } from 'even-toolkit/glass-screen-router'
+import type { AppState } from './store'
+import type { Pane } from './api'
+
+export interface Ctx {
+  exitApp: () => void
+  openPane: (n: string, label: string, isClaude: boolean, cwd: string, listIndex: number) => void
+  closePane: () => void
+  scrollDetail: (dir: 'up' | 'down') => void
+  startVoice: () => void
+  stopVoice: () => void
+  cancelInput: () => void
+  redoVoice: () => void
+  sendNow: () => void
+  scrollConfirm: (dir: 'up' | 'down') => void
+  pickMenuOption: (idx: number) => void
+  submitMenu: () => void
+  startNewSession: () => void
+  moveNewTag: (dir: 'up' | 'down') => void
+  chooseNewTag: () => void
+  stopNewTagVoice: () => void
+  stopNewVoice: () => void
+  retryNewVoice: () => void
+  createNewSession: () => void
+  cancelNewSession: () => void
+}
+
+const GLYPH: Record<string, string> = { waiting: '!', working: '●', idle: '○', other: '·' }
+const clip = (s: string, n: number) => (s.length <= n ? s : s.slice(0, n - 1) + '…')
+const DETAIL_SLOTS = 9
+
+function wrap(s: string, n: number): string[] {
+  const out: string[] = []
+  let r = s
+  while (r.length > n) { out.push(r.slice(0, n)); r = r.slice(n) }
+  out.push(r)
+  return out
+}
+
+// rows in menu mode = options (+ a Submit row when multi-select)
+const menuRowCount = (s: AppState) => (s.menu ? s.menu.options.length + (s.menu.multi ? 1 : 0) : 0)
+
+const listScreen: GlassScreen<AppState, Ctx> = {
+  display(s, nav): DisplayData {
+    if (s.loading) return { lines: [...glassHeader('TMUXor'), line('loading…', 'meta')] }
+    if (s.error) return { lines: [...glassHeader('TMUXor'), line('offline', 'meta'), line(clip(s.error, 26), 'meta')] }
+    const wait = s.panes.filter((p) => p.status === 'waiting').length
+    const work = s.panes.filter((p) => p.status === 'working').length
+    const idle = Math.max(0, s.panes.length - work - wait)
+    // one consistent bar; drop zero fields instead of hiding idle when busy
+    const bar = [wait && `${wait}! need you`, work && `${work}● working`, idle && `${idle}○ idle`].filter(Boolean).join(' · ') || 'no sessions'
+    // row 0 is a pinned "＋ new session" action; panes follow (null = the new-session row)
+    const items: (Pane | null)[] = [null, ...s.panes]
+    const VIS = 8
+    const pages = Math.max(1, Math.ceil(items.length / VIS))
+    const page = Math.min(pages, Math.floor(nav.highlightedIndex / VIS) + 1)
+    const list = buildScrollableList({
+      items,
+      highlightedIndex: nav.highlightedIndex,
+      maxVisible: VIS,
+      // tag (project) first — it's the disambiguator across ~35 sessions; only the long title clips
+      formatter: (it) => (it ? truncateGlassText(`${GLYPH[it.status] ?? '·'} ${it.tag}  ${it.label}`) : '＋ new session'),
+    })
+    return { lines: [...glassHeader(`PANELS ${s.panes.length} · p${page}/${pages} ◀◀=exit`, bar), ...list] }
+  },
+  action(a, nav, s, ctx) {
+    const total = s.panes.length + 1 // indices 0..panes.length (row 0 = new-session)
+    if (a.type === 'HIGHLIGHT_MOVE') {
+      // wrap around: swipe up from the first row jumps to the last, and vice versa —
+      // the fast way to reach the far end of a long fleet without a page-jump gesture.
+      const delta = a.direction === 'up' ? -1 : 1
+      return { ...nav, highlightedIndex: (nav.highlightedIndex + delta + total) % total }
+    }
+    if (a.type === 'SELECT_HIGHLIGHTED') {
+      if (nav.highlightedIndex === 0) { ctx.startNewSession(); return { screen: 'new', highlightedIndex: 0 } }
+      const p = s.panes[nav.highlightedIndex - 1]
+      if (p) {
+        ctx.openPane(p.n, p.label, p.is_claude, p.cwd, nav.highlightedIndex)
+        return { screen: 'detail', highlightedIndex: 0 }
+      }
+    }
+    if (a.type === 'GO_BACK') { ctx.exitApp(); return nav } // root double-tap = system exit dialog
+    return nav
+  },
+}
+
+const detailScreen: GlassScreen<AppState, Ctx> = {
+  display(s, nav): DisplayData {
+    const title = clip(s.activeLabel || 'session', 18)
+    if (s.phase === 'listening') {
+      return { lines: [
+        ...glassHeader(title, 'LISTENING'),
+        line('● ' + (s.status || `Speak your ${s.activeIsClaude ? 'message' : 'command'} now…`), 'normal'),
+        line('', 'meta'),
+        line('Tap when done · double-tap cancels', 'meta'),
+      ] }
+    }
+    if (s.phase === 'confirm') {
+      if (s.busy) return { lines: [...glassHeader(title, 'REVIEW'), line(s.status || 'working…', 'meta')] }
+      // full-bleed, scrollable transcript (rendered in columns mode → no left margin)
+      const total = s.draftLines.length
+      const top = Math.max(0, Math.min(s.confirmScroll, Math.max(0, total - DETAIL_SLOTS)))
+      const win = s.draftLines.slice(top, top + DETAIL_SLOTS)
+      const up = top > 0 ? '▲' : ' '
+      const dn = top + DETAIL_SLOTS < total ? '▼' : ' '
+      const label = s.activeIsClaude ? 'You said' : 'Will run'
+      const out = [line(`${label} ${up}${dn}  tap=SEND ◀◀=redo`, 'normal'), ...win.map((l) => line(l, 'meta'))]
+      if (s.status) out.push(line(s.status, 'meta')) // surface send/translate failures
+      return { lines: out }
+    }
+    // MENU MODE: pane is asking — render options as a selectable list. WINDOWED
+    // around the highlight so the selected row is always visible and every option
+    // is reachable (was capped at the first 8 with no scroll).
+    if (s.menu) {
+      const m = s.menu
+      const rows = menuRowCount(s)
+      const hi = Math.max(0, Math.min(nav.highlightedIndex, rows - 1))
+      const items = m.options.map((o, i) => ({
+        text: m.multi ? `${o.checked ? '[x]' : '[ ]'} ${o.title}` : `${o.num}. ${o.title}`,
+        sel: i === hi,
+      }))
+      if (m.multi) items.push({ text: '▸ Submit', sel: hi === m.options.length })
+      const SLOTS = 9
+      const top = Math.min(Math.max(0, hi - 3), Math.max(0, items.length - SLOTS))
+      const win = items.slice(top, top + SLOTS)
+      const up = top > 0 ? '▲' : ' '
+      const dn = top + SLOTS < items.length ? '▼' : ' '
+      // arrows + position + gesture hints FIRST so they're never clipped; question tail clips if long
+      const head = `${up}${dn} ${hi + 1}/${items.length} tap=pick ◀◀=back  ${m.question || s.activeLabel}`
+      const out = [line(truncateGlassText(head), 'normal')]
+      win.forEach((r) => out.push(line(truncateGlassText(`${r.sel ? '▶ ' : '   '}${r.text}`), r.sel ? 'inverted' : 'meta')))
+      return { lines: out }
+    }
+    // view: compact full-width content (1 header line + 9 content lines).
+    // claude pane => replies only; shell pane => live screen.
+    // a status line (e.g. the voice-off tap hint) takes one content slot when present.
+    const statusLine = s.status ? [line(s.status, 'meta')] : []
+    const slots = DETAIL_SLOTS - statusLine.length
+    const top = Math.max(0, Math.min(s.scroll, Math.max(0, s.lines.length - slots)))
+    const win = s.lines.slice(top, top + slots)
+    const up = top > 0 ? '▲' : ' '
+    const dn = top + slots < s.lines.length ? '▼' : ' '
+    const wk = s.working ? ' ⋯' : ''
+    const talk = s.voiceOn ? 'tap=talk' : 'voice off'
+    return { lines: [line(`${title} ${up}${dn}${wk} ${talk} ◀◀`, 'normal'), ...win.map((l) => line(truncateGlassText(l), 'meta')), ...statusLine] }
+  },
+  action(a, nav, s, ctx) {
+    if (s.phase === 'listening') {
+      if (a.type === 'SELECT_HIGHLIGHTED') ctx.stopVoice()
+      else if (a.type === 'GO_BACK') ctx.cancelInput()
+      return nav
+    }
+    if (s.phase === 'confirm') {
+      if (a.type === 'SELECT_HIGHLIGHTED') ctx.sendNow()
+      else if (a.type === 'HIGHLIGHT_MOVE') ctx.scrollConfirm(a.direction)  // swipe = scroll the transcript
+      else if (a.type === 'GO_BACK') ctx.redoVoice()                        // double-tap = back to recording (redo)
+      return nav
+    }
+    // MENU MODE: swipe highlights an option, tap picks/toggles, double-tap leaves
+    if (s.menu) {
+      const rows = menuRowCount(s)
+      if (a.type === 'HIGHLIGHT_MOVE') return { ...nav, highlightedIndex: moveHighlight(nav.highlightedIndex, a.direction, rows - 1) }
+      if (a.type === 'SELECT_HIGHLIGHTED') {
+        if (s.menu.multi && nav.highlightedIndex === s.menu.options.length) ctx.submitMenu()
+        else ctx.pickMenuOption(nav.highlightedIndex)
+        return nav
+      }
+      if (a.type === 'GO_BACK') { ctx.closePane(); return { screen: 'list', highlightedIndex: s.listIndex } }
+      return nav
+    }
+    // view
+    if (a.type === 'HIGHLIGHT_MOVE') { ctx.scrollDetail(a.direction); return nav }
+    if (a.type === 'SELECT_HIGHLIGHTED') { ctx.startVoice(); return nav }
+    if (a.type === 'GO_BACK') { ctx.closePane(); return { screen: 'list', highlightedIndex: s.listIndex } }
+    return nav
+  },
+}
+
+const newScreen: GlassScreen<AppState, Ctx> = {
+  display(s): DisplayData {
+    if (s.newPhase === 'busy')
+      return { lines: [...glassHeader('NEW SESSION'), line(s.newStatus || 'working…', 'normal')] }
+    if (s.newPhase === 'done')
+      return { lines: [
+        ...glassHeader('NEW SESSION', 'tap=open ◀◀=list'),
+        line('✓ Claude → ' + (s.newStatus || 'created'), 'normal'),
+        ...wrap(s.newPath, 42).slice(0, 3).map((l) => line(l, 'meta')),
+      ] }
+    if (s.newPhase === 'tag') {
+      // step 1: pick the project tag (window) — row 0 = new tag, then existing windows
+      const rows = ['＋ New tag (speak)', ...s.newTags]
+      const hi = Math.max(0, Math.min(s.newTagIndex, rows.length - 1))
+      const SLOTS = 9
+      const top = Math.min(Math.max(0, hi - 3), Math.max(0, rows.length - SLOTS))
+      const up = top > 0 ? '▲' : ' '
+      const dn = top + SLOTS < rows.length ? '▼' : ' '
+      const out = [line(`${up}${dn} ${hi + 1}/${rows.length} tap=pick ◀◀=back`, 'normal')]
+      rows.slice(top, top + SLOTS).forEach((t, i) => {
+        const sel = top + i === hi
+        out.push(line(truncateGlassText(`${sel ? '▶ ' : '   '}${t}`), sel ? 'inverted' : 'meta'))
+      })
+      // surface loading/failure so an empty tag list isn't mistaken for "no tags exist"
+      if (s.newStatus) out.push(line(s.newStatus, 'meta'))
+      return { lines: out }
+    }
+    if (s.newPhase === 'tagvoice')
+      return { lines: [
+        ...glassHeader('NEW TAG', 'tap=done ◀◀=back'),
+        line('● ' + (s.newStatus || 'Speak the tag name…'), 'normal'),
+        line('e.g. "gema", "hcppi"', 'meta'),
+      ] }
+    if (s.newPhase === 'confirm') {
+      const out = [...glassHeader('NEW SESSION', 'tap=create ◀◀=cancel'), line(`tag:  ${s.newTag || '(new window by folder)'}`, 'normal'), line('folder:', 'meta')]
+      out.push(...wrap(s.newPath, 42).slice(0, 4).map((l) => line(l, 'normal')))
+      if (s.newStatus) out.push(line(s.newStatus, 'meta'))
+      return { lines: out }
+    }
+    // listening (folder)
+    return { lines: [
+      ...glassHeader(s.newTag ? `tag: ${clip(s.newTag, 12)}` : 'NEW SESSION', 'tap=done ◀◀=back'),
+      line('● ' + (s.newStatus || 'Speak the folder…'), 'normal'),
+      line('e.g. "evenrealities", "blood proteomics"', 'meta'),
+    ] }
+  },
+  action(a, nav, s, ctx) {
+    if (s.newPhase === 'tag') {
+      if (a.type === 'HIGHLIGHT_MOVE') { ctx.moveNewTag(a.direction); return nav }
+      if (a.type === 'SELECT_HIGHLIGHTED') { ctx.chooseNewTag(); return nav }
+      if (a.type === 'GO_BACK') { ctx.cancelNewSession(); return { screen: 'list', highlightedIndex: 0 } }
+      return nav
+    }
+    if (s.newPhase === 'tagvoice') {
+      if (a.type === 'SELECT_HIGHLIGHTED') { if (s.newStatus.includes('retry')) ctx.retryNewVoice(); else ctx.stopNewTagVoice() }
+      else if (a.type === 'GO_BACK') { ctx.cancelNewSession(); return { screen: 'list', highlightedIndex: 0 } }
+      return nav
+    }
+    if (s.newPhase === 'listening') {
+      if (a.type === 'SELECT_HIGHLIGHTED') { if (s.newStatus.includes('retry')) ctx.retryNewVoice(); else ctx.stopNewVoice() }
+      else if (a.type === 'GO_BACK') { ctx.cancelNewSession(); return { screen: 'list', highlightedIndex: 0 } }
+      return nav
+    }
+    if (s.newPhase === 'confirm') {
+      if (a.type === 'SELECT_HIGHLIGHTED') ctx.createNewSession()
+      else if (a.type === 'GO_BACK') { ctx.cancelNewSession(); return { screen: 'list', highlightedIndex: 0 } }
+      return nav
+    }
+    if (s.newPhase === 'done') {
+      if (a.type === 'SELECT_HIGHLIGHTED' && s.newPaneN) {
+        const p = s.panes.find((x) => x.n === s.newPaneN)
+        ctx.openPane(s.newPaneN, p?.label || 'new', true, p?.cwd || s.newPath, 0)
+        return { screen: 'detail', highlightedIndex: 0 }
+      }
+      if (a.type === 'GO_BACK') { ctx.cancelNewSession(); return { screen: 'list', highlightedIndex: 0 } }
+      return nav
+    }
+    return nav // busy: swallow input
+  },
+}
+
+export const router = createGlassScreenRouter<AppState, Ctx>({ list: listScreen, detail: detailScreen, new: newScreen }, 'list')
