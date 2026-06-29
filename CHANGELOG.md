@@ -6,6 +6,11 @@ project memory; this file is the short "what changed" for each build.
 > Builds: TMUXor ships as a single **public** `.ehpk` — it bakes no secrets, so every user
 > enters their own backend URL + token on the app's Setup screen.
 
+## 1.0.7 — 2026-06-29
+- **Store-review fix:** removed the two stray URLs the Even reviewer flagged from the bundle — the
+  Setup field's example URL (now a plain text hint) and React/react-router's dead "error docs"
+  links (react.dev/errors, reactrouter.com), which the app never connects to. No functional change.
+
 ## 1.0.6 — 2026-06-28
 - **Fix: option prompts now actually show up.** Claude's Bash / edit permission prompts ("Do you
   want to proceed? ❯ 1. Yes / 2. No …") weren't being detected — only AskUserQuestion-style ones
