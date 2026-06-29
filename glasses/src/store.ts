@@ -103,24 +103,43 @@ export async function refresh() {
 
 // --- detect an interactive option menu in the captured screen ---
 function parseMenu(raw: string[]): MenuState | null {
-  const options: MenuOption[] = []
-  let multi = false
-  for (const l of raw) {
-    const m = l.match(/^\s*(❯|›|>|\*)?\s*(\d+)[.)]\s*(\[([ xX*])\]\s*)?(.+?)\s*$/)
-    if (m && m[5] && !/^\d/.test(m[5])) {
-      if (m[3]) multi = true
-      options.push({ num: Number(m[2]), title: m[5].trim(), current: !!m[1], checked: /[xX*]/.test(m[4] || '') })
-    }
+  // An option line: an optional box-border │, an optional ❯/› cursor, a number, then the label.
+  // (capture-pane's -J already rejoined soft-wrapped options, so each option is one logical line.)
+  const OPT = /^\s*[│|]?\s*(❯|›|>|\*)?\s*(\d+)[.)]\s*(\[([ xX*])\]\s*)?(.+?)\s*$/
+  const isCursor = (l: string) => /^\s*[│|]?\s*[❯›]\s*\d+[.)]/.test(l)  // a real TUI cursor (not >/*/list)
+  const opts: { i: number; num: number; title: string; cur: boolean; box: boolean; checked: boolean }[] = []
+  raw.forEach((l, i) => {
+    const m = l.match(OPT)
+    if (m && m[5] && !/^\d/.test(m[5])) opts.push({ i, num: Number(m[2]), title: m[5].trim(), cur: isCursor(l), box: !!m[3], checked: /[xX*]/.test(m[4] || '') })
+  })
+  if (opts.length < 2) return null
+  // ANCHOR the option list to the ❯ cursor: keep only the consecutive-numbered run that contains
+  // the cursor. This rejects "phantom" options from a numbered list in the plan / scrollback ABOVE
+  // the prompt (no cursor, and doesn't chain into the real run that starts at 1). Without a cursor,
+  // fall back to the LAST run starting at 1 (the live prompt sits at the bottom) + require a footer.
+  let lo: number, hi: number
+  const ci = opts.findIndex((o) => o.cur)
+  if (ci >= 0) {
+    lo = hi = ci
+    while (lo > 0 && opts[lo - 1].num === opts[lo].num - 1) lo--
+    while (hi < opts.length - 1 && opts[hi + 1].num === opts[hi].num + 1) hi++
+  } else {
+    if (!raw.some((l) => /to navigate|to select|✔ ?submit|esc to cancel/i.test(l))) return null
+    lo = -1
+    for (let k = opts.length - 1; k >= 0; k--) if (opts[k].num === 1) { lo = k; break }
+    if (lo < 0) return null
+    hi = lo
+    while (hi < opts.length - 1 && opts[hi + 1].num === opts[hi].num + 1) hi++
   }
-  if (options.length < 2) return null
-  // It IS an interactive prompt if either the TUI cursor (❯/›) sits on a numbered option — this
-  // catches Claude's Bash/edit permission prompts, which have NO footer hint — OR there's an
-  // AskUserQuestion-style footer. Without one of these it's just a numbered list in prose, not a menu.
-  const cursor = raw.some((l) => /^\s*[❯›]\s*\d+[.)]/.test(l))
-  const footer = raw.some((l) => /to navigate|to select|✔ ?submit|esc to cancel/i.test(l))
-  if (!cursor && !footer) return null
-  const q = (raw.find((l) => l.includes('?') && l.trim().length > 8) || '').trim().replace(/^[❯>›*\s]+/, '')
-  return { question: q, options, multi, cursorIndex: Math.max(0, options.findIndex((o) => o.current)) }
+  const block = opts.slice(lo, hi + 1)
+  if (block.length < 2) return null
+  const q = (raw.find((l) => l.includes('?') && l.trim().length > 8) || '').trim().replace(/^[│|❯>›*\s]+/, '')
+  return {
+    question: q,
+    options: block.map((o) => ({ num: o.num, title: o.title, current: o.cur, checked: o.checked })),
+    multi: block.some((o) => o.box),
+    cursorIndex: Math.max(0, block.findIndex((o) => o.cur)),
+  }
 }
 
 // --- live pane view: strip TUI chrome ---
@@ -221,7 +240,9 @@ function renderTurns(turns: Turn[]): string[] {
   turns.forEach((t, ti) => {
     if (t.role === 'user') {
       if (ti > 0) { add(''); add(DIVIDER) }          // break from the previous turn
-      t.text.split('\n').forEach((l, i) => add(i === 0 ? '▶ ' + l : l))
+      // ▶ marks the prompt; indent its continuation lines 2 so a multi-line prompt reads as one
+      // left-shifted block (without the indent, lines 2+ look exactly like the assistant's reply)
+      t.text.split('\n').forEach((l, i) => add(i === 0 ? '▶ ' + l : (l.trim() ? '  ' + l : l)))
       add('')                                         // gap before the answer
     } else {
       if (ti > 0 && turns[ti - 1].role === 'assistant') add('') // gap between separate replies
@@ -409,11 +430,21 @@ export function jumpToLatest(): boolean {
 export async function pickMenuOption(targetIdx: number) {
   const m = state.menu, n = state.activePaneN
   if (!m || !n) return
-  const delta = targetIdx - m.cursorIndex
-  const keys: string[] = []
-  for (let i = 0; i < Math.abs(delta); i++) keys.push(delta > 0 ? 'Down' : 'Up')
-  keys.push(m.multi ? 'Space' : 'Enter') // multi: toggle (stay); single: select+submit
-  try { await sendKeys(n, keys) } catch { /* SSE will resync */ }
+  if (m.multi) {
+    // multi-select: move to the row (relative to the live cursor) and toggle with Space, staying
+    // in the menu. Optimistically advance our local cursor so back-to-back toggles aren't off-by.
+    const delta = targetIdx - m.cursorIndex
+    const keys: string[] = []
+    for (let i = 0; i < Math.abs(delta); i++) keys.push(delta > 0 ? 'Down' : 'Up')
+    keys.push('Space')
+    set({ menu: { ...m, cursorIndex: targetIdx } })
+    try { await sendKeys(n, keys) } catch { /* SSE will resync */ }
+  } else {
+    // single-select: press the option's NUMBER, then Enter to confirm. Absolute (cursor-independent),
+    // so a stale/late SSE cursor can never make us approve the WRONG option — the number jump-selects.
+    const num = String(m.options[targetIdx]?.num ?? targetIdx + 1)
+    try { await sendKeys(n, [num, 'Enter']) } catch { /* SSE will resync */ }
+  }
 }
 export async function submitMenu() {
   const n = state.activePaneN

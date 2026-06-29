@@ -6,6 +6,17 @@ project memory; this file is the short "what changed" for each build.
 > Builds: TMUXor ships as a single **public** `.ehpk` — it bakes no secrets, so every user
 > enters their own backend URL + token on the app's Setup screen.
 
+## 1.0.8 — 2026-06-29
+- **Conversations read much better.** Code blocks are kept VERBATIM with a │ left rail — they used
+  to be silently corrupted (`**kwargs`→`kwargs`, `a * b`→`a  b`, `__init__`→`init`); section
+  headings show with ■, blockquotes with »; and a multi-line question stays indented under its ▶ so
+  it no longer blurs into the reply.
+- **Option prompts are more robust across all Claude Code prompt types.** Plan-mode no longer turns
+  the plan's numbered steps into fake choices (options are anchored to the ❯ cursor's run); a
+  single choice is confirmed by its number key (cursor-independent, so a momentary mis-read can't
+  approve the WRONG option); boxed prompts are tolerated. (The conversation markers are a backend
+  change — re-run install.sh or restart the service; the option fixes are in the app build.)
+
 ## 1.0.7 — 2026-06-29
 - **Store-review fix:** removed the two stray URLs the Even reviewer flagged from the bundle — the
   Setup field's example URL (now a plain text hint) and React/react-router's dead "error docs"

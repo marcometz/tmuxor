@@ -235,10 +235,8 @@ def _assistant_prose(content):
     return "\n".join(x for x in parts if x).strip()
 
 
-def _strip_markdown(t):
-    """Flatten markdown to plain text — the glasses can't render markdown."""
-    t = re.sub(r"```[^\n]*\n", "", t)            # opening code fence + lang
-    t = t.replace("```", "")
+def _strip_prose(t):
+    """Flatten the markdown CONSTRUCTS in a prose segment (never run on code — see _strip_markdown)."""
     # tables: drop the |---|---| separator rows, render "| a | b |" as "a · b"
     rows = []
     for ln in t.split("\n"):
@@ -251,7 +249,7 @@ def _strip_markdown(t):
         else:
             rows.append(ln)
     t = "\n".join(rows)
-    t = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", t)   # headings
+    t = re.sub(r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", r"■ \1", t)  # heading -> kept + marked (not erased)
     t = re.sub(r"\*\*(.+?)\*\*", r"\1", t, flags=re.S)
     t = re.sub(r"__(.+?)__", r"\1", t, flags=re.S)
     t = re.sub(r"\*(.+?)\*", r"\1", t, flags=re.S)
@@ -259,10 +257,24 @@ def _strip_markdown(t):
     t = re.sub(r"`([^`]+)`", r"\1", t)            # inline code
     t = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", t)  # image -> alt
     t = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", t)   # link -> text
-    t = re.sub(r"(?m)^\s{0,3}>\s?", "", t)        # blockquote marker
+    t = re.sub(r"(?m)^\s{0,3}>\s?", "» ", t)      # blockquote -> kept marker (not erased)
     t = re.sub(r"(?m)^(\s*)[-*+]\s+", r"\1• ", t)  # bullets -> •
     t = re.sub(r"(?m)^\s*([-*_])\1{2,}\s*$", "", t)  # horizontal rules
-    return t.strip()
+    return t
+
+
+def _strip_markdown(t):
+    """Flatten markdown to plain text — the glasses can't render markdown. Code fences are kept
+    VERBATIM with a '│ ' left rail; the markdown transforms run ONLY on the prose between fences,
+    so code is never mutated (no more __init__->init, **kwargs->kwargs, `a * b`->`a  b`, `- x`->`• x`)."""
+    segs = re.split(r"(?m)^[ \t]*`{3,}[^\n]*$", t)  # split on the ``` fence lines (open + close)
+    out = []
+    for i, seg in enumerate(segs):
+        if i % 2 == 1:  # text between an opening and closing fence = code: keep raw, add a rail
+            out.append("\n".join(("│ " + ln) if ln.strip() else "│" for ln in seg.strip("\n").split("\n")))
+        else:
+            out.append(_strip_prose(seg))
+    return "\n".join(out).strip()
 
 
 def _user_prompt(rec):
