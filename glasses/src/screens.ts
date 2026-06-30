@@ -3,7 +3,7 @@
 import { line, glassHeader, type DisplayData } from 'even-toolkit/types'
 import { buildScrollableList } from 'even-toolkit/glass-display-builders'
 import { moveHighlight } from 'even-toolkit/glass-nav'
-import { truncateGlassText } from 'even-toolkit/pretext'
+import { truncateGlassText, getTextWidth } from 'even-toolkit/pretext'
 import { createGlassScreenRouter, type GlassScreen } from 'even-toolkit/glass-screen-router'
 import type { AppState } from './store'
 import type { Pane } from './api'
@@ -24,6 +24,7 @@ export interface Ctx {
   sendNow: () => void
   scrollConfirm: (dir: 'up' | 'down') => void
   pickMenuOption: (idx: number) => void
+  menuTabNext: () => void
   submitMenu: () => void
   startNewSession: () => void
   moveNewTag: (dir: 'up' | 'down') => void
@@ -38,7 +39,7 @@ export interface Ctx {
 const GLYPH: Record<string, string> = { waiting: '!', working: '●', idle: '○', other: '·' }
 const clip = (s: string, n: number) => (s.length <= n ? s : s.slice(0, n - 1) + '…')
 const DETAIL_SLOTS = 9
-const VIEW_SLOTS = 8  // conversation/shell view: header + 8 content + 1 footer (must match store VIEW_SLOTS)
+const VIEW_SLOTS = 9  // conversation/shell view: header (with scroll/position) + 9 content, no footer (must match store VIEW_SLOTS)
 
 function wrap(s: string, n: number): string[] {
   const out: string[] = []
@@ -48,8 +49,50 @@ function wrap(s: string, n: number): string[] {
   return out
 }
 
-// rows in menu mode = options (+ a Submit row when multi-select)
-const menuRowCount = (s: AppState) => (s.menu ? s.menu.options.length + (s.menu.multi ? 1 : 0) : 0)
+// Pixel-accurate word-wrap to at most `max` display lines (proportional font); each line is also
+// truncateGlassText-clipped at render. Used to show the prompt question above the option list.
+function wrapLines(s: string, max: number, width = 568): string[] {
+  const out: string[] = []
+  let cur = ''
+  for (const w of s.split(/\s+/)) {
+    const trial = cur ? cur + ' ' + w : w
+    if (getTextWidth(trial) <= width) { cur = trial; continue }
+    if (cur) out.push(cur)
+    if (out.length >= max) return out.slice(0, max)
+    cur = w
+  }
+  if (cur) out.push(cur)
+  return out.slice(0, max)
+}
+
+// PICK rows = the options, then synthetic action rows. AskUserQuestion ('ask') gets a "next
+// question" (→) and a "submit" (↵); a plain multi-select gets just a Submit. One list drives both
+// the display and the tap handler so a highlighted row always maps to the same action.
+type MenuRow = { text: string; kind: 'opt' | 'next' | 'submit'; idx: number }
+function menuRows(s: AppState): MenuRow[] {
+  const m = s.menu
+  if (!m) return []
+  // Glyph note: the G2 firmware font lacks ☐/☑/✔/✎/▸ (they render blank), but → ▶ » · do render.
+  // So free-text keeps its number (the "Type something" label is self-explanatory), "next" uses →,
+  // and "submit" uses » (a checkmark/▸ would be invisible).
+  const rows: MenuRow[] = m.options.map((o, i) => ({
+    kind: 'opt', idx: i,
+    // free-text ("Type something") isn't a checkbox even in a multi-select — keep it as "N. title",
+    // not a fake "[ ]". Real multi-select options show their tick state; single-select shows "N.".
+    text: (m.multi && !o.free) ? `${o.checked ? '[x]' : '[ ]'} ${o.title}` : `${o.num}. ${o.title}`,
+  }))
+  if (m.ask) {
+    // Single-select questions AUTO-ADVANCE on answer (verified on-device), so they need no extra row.
+    // MULTI-select doesn't advance, so it gets "→ next question". The real Submit screen has its OWN
+    // "Submit answers" option you tap — no synthetic submit. Only the rare option-less Submit screen
+    // (the synthetic menu) gets a "» submit answers" fallback.
+    if (m.multi && m.options.length) rows.push({ kind: 'next', idx: -1, text: '→ next question' })
+    else if (!m.options.length) rows.push({ kind: 'submit', idx: -1, text: '» submit answers' })
+  } else if (m.multi) {
+    rows.push({ kind: 'submit', idx: -1, text: '» Submit' })
+  }
+  return rows
+}
 
 const listScreen: GlassScreen<AppState, Ctx> = {
   display(s, nav): DisplayData {
@@ -134,30 +177,41 @@ const detailScreen: GlassScreen<AppState, Ctx> = {
         const win = body.slice(top, top + DETAIL_SLOTS)
         const up = top > 0 ? '▲' : ' '
         const dn = top + DETAIL_SLOTS < body.length ? '▼' : ' '
-        const head = `read ${up}${dn}  swipe · tap=choose · ◀◀=back`
+        const head = `read ${up}${dn}  swipe · tap=${m.ask ? 'answer' : 'choose'} · ◀◀=back`
         return { lines: [line(truncateGlassText(head), 'normal'), ...win.map((l) => line(truncateGlassText(l), 'meta'))] }
       }
       // PICK: choose the option (▶ marks the selection; columns mode flattens the style).
-      const rows = menuRowCount(s)
-      const hi = Math.max(0, Math.min(nav.highlightedIndex, rows - 1))
-      const items = m.options.map((o, i) => ({
-        text: m.multi ? `${o.checked ? '[x]' : '[ ]'} ${o.title}` : `${o.num}. ${o.title}`,
-        sel: i === hi,
-      }))
-      if (m.multi) items.push({ text: '▸ Submit', sel: hi === m.options.length })
-      const SLOTS = 9
-      const top = Math.min(Math.max(0, hi - 3), Math.max(0, items.length - SLOTS))
-      const win = items.slice(top, top + SLOTS)
-      const up = top > 0 ? '▲' : ' '
-      const dn = top + SLOTS < items.length ? '▼' : ' '
-      const head = `pick ${up}${dn} ${hi + 1}/${items.length}  tap=select · ◀◀=read${m.question ? '  ' + m.question : ''}`
-      const out = [line(truncateGlassText(head), 'normal')]
-      win.forEach((r) => out.push(line(truncateGlassText(`${r.sel ? '▶ ' : '   '}${r.text}`), r.sel ? 'inverted' : 'meta')))
+      const items = menuRows(s)
+      const hi = Math.max(0, Math.min(nav.highlightedIndex, items.length - 1))
+      // show the question (≤2 wrapped lines) ABOVE the options so you don't have to go back to READ
+      // just to recall it; the option window shrinks so the total stays within the line budget.
+      const qLines = m.question ? wrapLines(m.question, 2) : []
+      const budget = 9 - qLines.length            // display lines available for options (header takes 1)
+      // Wrap each option onto as many lines as it needs — long labels used to get truncated to one line.
+      // Flatten to display lines tagged with their selected state, then window the LINES around the
+      // highlighted option (not whole rows) so a long highlighted option stays visible; every line of an
+      // option shares its ▶ / inverted style. Continuation lines hang-indent under the marker.
+      const dl: { text: string; sel: boolean }[] = []
+      items.forEach((r, i) => {
+        const sel = i === hi
+        const segs = wrapLines(r.text, 6, 544)    // 544 leaves ~24px for the ▶/indent prefix
+        ;(segs.length ? segs : ['']).forEach((seg, j) => dl.push({ text: (j === 0 ? (sel ? '▶ ' : '   ') : '   ') + seg, sel }))
+      })
+      const hiFirst = Math.max(0, dl.findIndex((d) => d.sel))
+      const start = Math.min(Math.max(0, hiFirst - 1), Math.max(0, dl.length - budget))
+      const winLines = dl.slice(start, start + budget)
+      // AskUserQuestion: tag the header so the user knows it's multi-step (answer each, then submit).
+      const verb = m.ask ? 'answer' : 'pick'
+      const arrows = `${start > 0 ? '▲' : ''}${start + budget < dl.length ? '▼' : ''}`
+      const head = s.status ? `${verb}  ${s.status}` : `${verb} ${hi + 1}/${items.length} ${arrows} ◀◀=read`
+      const out = [line(truncateGlassText(head), 'normal'), ...qLines.map((l) => line(truncateGlassText(l), 'normal'))]
+      winLines.forEach((d) => out.push(line(truncateGlassText(d.text), d.sel ? 'inverted' : 'meta')))
       return { lines: out }
     }
-    // view: header (session title) + 8 content lines + a footer (gesture hints + scroll position).
-    // claude pane => replies only; shell pane => live screen. A transient status (send/translate
-    // error) rides in the footer so the scrollable content area stays a fixed 8 lines.
+    // view: ONE header row carrying title + scroll arrows + position + tap hint, then 9 content
+    // lines (no separate footer — that frees a whole row for the conversation). claude pane =>
+    // replies only; shell pane => live screen. A transient status (send/translate error) takes over
+    // the header row when present.
     const slots = VIEW_SLOTS
     // allow top up to len-1 (not just len-slots) so a jump-to-prompt can place the latest prompt
     // at the TOP even when it's within the last few lines (window then shows it + blanks below)
@@ -167,12 +221,11 @@ const detailScreen: GlassScreen<AppState, Ctx> = {
     const dn = top + slots < s.lines.length ? '▼' : ' '
     const wk = s.working ? ' ⋯' : ''
     const talk = s.voiceOn ? 'tap=talk' : 'tap=type'
-    const pos = s.lines.length > slots ? `  ${Math.min(top + slots, s.lines.length)}/${s.lines.length}` : ''
-    const footer = s.status || `${up}${dn} ${talk} · ◀◀${pos}`
+    const pos = s.lines.length > slots ? ` ${Math.min(top + slots, s.lines.length)}/${s.lines.length}` : ''
+    const head = s.status ? `${title}  ${s.status}` : `${title}${wk}  ${up}${dn}${pos}  ${talk}`
     return { lines: [
-      line(truncateGlassText(`${title}${wk}`), 'normal'),
+      line(truncateGlassText(head), 'normal'),
       ...win.map((l) => line(truncateGlassText(l), 'meta')),
-      line(truncateGlassText(footer), 'meta'),
     ] }
   },
   action(a, nav, s, ctx) {
@@ -196,11 +249,19 @@ const detailScreen: GlassScreen<AppState, Ctx> = {
         if (a.type === 'GO_BACK') { ctx.closePane(); return { screen: 'list', highlightedIndex: s.listIndex } }
         return nav
       }
-      const rows = menuRowCount(s)
-      if (a.type === 'HIGHLIGHT_MOVE') return { ...nav, highlightedIndex: moveHighlight(nav.highlightedIndex, a.direction, rows - 1) }
+      const rows = menuRows(s)
+      // a swipe only moves the LOCAL ▶ highlight; the tap (pickMenuOption) then moves the prompt's ❯
+      // to it in one batch (robust to the G2 pad emitting a burst of swipe events).
+      if (a.type === 'HIGHLIGHT_MOVE') return { ...nav, highlightedIndex: moveHighlight(nav.highlightedIndex, a.direction, rows.length - 1) }
       if (a.type === 'SELECT_HIGHLIGHTED') {
-        if (s.menu.multi && nav.highlightedIndex === s.menu.options.length) ctx.submitMenu()
-        else ctx.pickMenuOption(nav.highlightedIndex)
+        const hi2 = Math.max(0, Math.min(nav.highlightedIndex, rows.length - 1))
+        const row = rows[hi2]
+        if (row?.kind === 'submit') ctx.submitMenu()
+        else if (row?.kind === 'next') ctx.menuTabNext()
+        else ctx.pickMenuOption(row?.idx ?? hi2)
+        // do NOT advance the ▶ highlight on a toggle: the prompt's ❯ cursor STAYS on the toggled row
+        // (verified on-device — Space doesn't auto-advance), so ▶ must stay too or they desync and
+        // every later swipe lands one off. Move to the next item with a swipe.
         return nav
       }
       if (a.type === 'GO_BACK') { ctx.menuToRead(); return nav }
@@ -225,12 +286,12 @@ const newScreen: GlassScreen<AppState, Ctx> = {
     if (s.newPhase === 'done')
       return { lines: [
         ...glassHeader('NEW SESSION', 'tap=open ◀◀=list'),
-        line('✓ Claude → ' + (s.newStatus || 'created'), 'normal'),
+        line('» Claude → ' + (s.newStatus || 'created'), 'normal'),
         ...wrap(s.newPath, 42).slice(0, 3).map((l) => line(l, 'meta')),
       ] }
     if (s.newPhase === 'tag') {
       // step 1: pick the project tag (window) — row 0 = new tag, then existing windows
-      const rows = ['＋ New tag (speak)', ...s.newTags]
+      const rows = ['＋ New tag ' + (s.voiceOn ? '(speak)' : '(type)'), ...s.newTags]
       const hi = Math.max(0, Math.min(s.newTagIndex, rows.length - 1))
       const SLOTS = 9
       const top = Math.min(Math.max(0, hi - 3), Math.max(0, rows.length - SLOTS))

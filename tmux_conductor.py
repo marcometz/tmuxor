@@ -30,6 +30,14 @@ TMUX = "tmux"
 SELF_PANE = os.environ.get("TMUX_PANE", "")  # conductor's own pane id; never send here
 PASTE_BUF = "tmuxcond"  # dedicated buffer name so we don't touch the user's clipboard
 AUDIT = Path(os.environ.get("TMUX_CONDUCTOR_AUDIT", str(Path.home() / ".tmux-conductor-audit.log")))
+# The audit log records every keystroke/text sent into panes — keep it private (0600), matching the
+# chmod-600 convention for the credentials env file. Tighten any pre-existing world-readable log here;
+# new writes create it 0600 (see _audit).
+try:
+    if AUDIT.exists():
+        os.chmod(AUDIT, 0o600)
+except OSError:
+    pass
 
 # Claude Code stores per-project session transcripts under these roots. This
 # machine uses profiles, so sessions live under several of them.
@@ -64,7 +72,8 @@ def _check(args, input_text=None):
 
 def _audit(action, pane_id, detail):
     try:
-        with AUDIT.open("a") as f:
+        fd = os.open(str(AUDIT), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a") as f:
             f.write(json.dumps({"ts": round(time.time(), 3), "action": action,
                                 "pane": pane_id, **detail}) + "\n")
     except Exception:
@@ -169,10 +178,25 @@ def _config_dir_for_pid(pid):
     return None
 
 
+def _encode_project_dir(cwd: str) -> str:
+    """Claude Code's on-disk encoding of a project path into projects/<dir>: it replaces BOTH '/' and
+    '.' with '-' (verified on disk: '/home/u/proj.v2' -> '-home-u-proj-v2', '/.config' -> '--config').
+    Replacing only '/' broke any dotted cwd (git worktrees under .claude/..., version-dotted dirs) ->
+    a non-existent dir -> an empty conversation. Keep this the single source of truth for the mapping."""
+    return cwd.replace("/", "-").replace(".", "-")
+
+
+def _safe_mtime(p) -> float:
+    try:
+        return p.stat().st_mtime
+    except OSError:  # file rotated/deleted between glob and sort -> don't 500 the request
+        return 0.0
+
+
 def transcript_candidates(cwd: str, pid=None):
     """All session JSONL files whose project dir matches `cwd`, newest first.
     cwd->transcript is one-to-many when several sessions share a directory."""
-    enc = cwd.replace("/", "-")
+    enc = _encode_project_dir(cwd)
     roots = list(PROJECT_ROOTS)
     cfg = _config_dir_for_pid(pid)
     if cfg:
@@ -186,7 +210,7 @@ def transcript_candidates(cwd: str, pid=None):
                     continue
                 seen.add(j)
                 out.append(j)
-    out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    out.sort(key=_safe_mtime, reverse=True)
     return out
 
 
@@ -334,6 +358,8 @@ def read_conversation(jsonl_path):
                 turns.append({"role": "user", "text": _strip_markdown(text)})
     if key is not None:
         _convo_cache[jsonl_path] = (key, turns)
+        if len(_convo_cache) > 64:  # bound memory: transcripts rotate over the service's lifetime
+            _convo_cache.pop(next(iter(_convo_cache)))
     return turns
 
 
@@ -413,7 +439,7 @@ def _session_record(sd, claude_pid, sessionId, cwd):
         info = json.loads((sd / f"{claude_pid}.json").read_text())
     except Exception:
         return None
-    projects_dir = sd.parent / "projects" / cwd.replace("/", "-")
+    projects_dir = sd.parent / "projects" / _encode_project_dir(cwd)
     return {**info, "jsonl": _live_jsonl(projects_dir, sessionId)}
 
 
@@ -444,8 +470,10 @@ def resolve_session(pane):
             if str(info.get("procStart")) != str(_proc_start_ticks(pid)):
                 continue  # stale record from a recycled pid
             cwd = info.get("cwd", "")
+            if len(_resolve_cache) > 256:  # bound: pane pids churn over the service's lifetime
+                _resolve_cache.pop(next(iter(_resolve_cache)))
             _resolve_cache[pane_pid] = (pid, info.get("procStart"), str(sd), info.get("sessionId"), cwd)
-            projects_dir = sd.parent / "projects" / cwd.replace("/", "-")
+            projects_dir = sd.parent / "projects" / _encode_project_dir(cwd)
             return {**info, "jsonl": _live_jsonl(projects_dir, info.get("sessionId"))}
     return None
 

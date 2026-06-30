@@ -377,7 +377,10 @@ class Handler(BaseHTTPRequestHandler):
             # home directory. The phone always carries the token, so it still gets both.
             authed = self._authed()
             kp = q.get("keypath", [None])[0] if authed else None
-            voice = bool(openai_key(kp))
+            # Only probe for the key (which reads ~/.env etc. and reveals its presence) when authed —
+            # otherwise an unauthenticated tailnet peer gets a secret-presence oracle. The phone always
+            # carries the token, so it still gets the real value; an anon probe just sees reachability.
+            voice = bool(openai_key(kp)) if authed else False
             resp = {"ok": True, "service": "conductor-api", "voice": voice}
             if not voice and authed:
                 resp["checked"] = openai_key_checked(kp)  # tell the user WHERE we looked

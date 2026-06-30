@@ -6,6 +6,186 @@ project memory; this file is the short "what changed" for each build.
 > Builds: TMUXor ships as a single **public** `.ehpk` — it bakes no secrets, so every user
 > enters their own backend URL + token on the app's Setup screen.
 
+## 1.0.32 — 2026-06-30
+- **Review pass (multi-agent code review, verified findings).** Backend: project-dir encoding now
+  matches Claude Code's real mapping (replaces `.` as well as `/`) so sessions whose folder contains a
+  dot — e.g. git worktrees under `.claude/…` or version-dotted dirs — no longer show an empty
+  conversation; the audit log is created/kept private (chmod 600); `/api/health` no longer reveals
+  OpenAI-key presence to unauthenticated callers; the transcript sort no longer 500s if a file rotates
+  mid-request; the conversation/resolve caches are now bounded (no slow memory growth in the long-lived
+  service). App: sending to a **shell** pane no longer leaves a stuck "⋯" working line; the HUD no
+  longer goes to sleep while a prompt is open (which could swallow your answer tap); the new-session
+  "done" marker uses a glyph that actually renders (the old ✓ drew blank); and "New tag (speak)" now
+  says "(type)" when voice is off.
+
+## 1.0.31 — 2026-06-30
+- **The read view of a question prompt now wraps to the glasses, not the terminal.** It was showing
+  the raw terminal capture, whose lines are pre-wrapped at the terminal's (narrower) width — so the
+  question and option labels broke at the terminal's spots, leaving early breaks on the glasses. The
+  read view of an AskUserQuestion is now rebuilt from the parsed question + option labels +
+  descriptions and wrapped to the glasses width, so it fills evenly like the answer view. (Permission
+  / plan prompts still show the raw command/diff verbatim.)
+
+## 1.0.30 — 2026-06-30
+- **Conversation text no longer wraps early.** Lines were being filled right up to the device's
+  usable edge, so the firmware re-wrapped them on screen and left stray short remainders ("wrapped
+  early sometimes"). The conversation/read wrap width now matches the answer view's proven-good
+  width with a safe margin, so lines fill consistently.
+
+## 1.0.29 — 2026-06-29
+- **Long options now wrap consistently in the READ view too.** The answer view already wrapped long
+  labels with a hanging indent; the read/conversation view of the prompt was wrapping the raw lines
+  with no hanging indent, so a long option's continuation lines fell back to the left margin and
+  looked broken. The read view now indents wrapped option lines under the option text (past the
+  `❯`/number/checkbox prefix), matching the answer view.
+
+## 1.0.28 — 2026-06-29
+- **Long option labels now WRAP instead of getting cut off** in the answer view. Each option wraps
+  onto as many lines as it needs; the list scrolls by display line so the highlighted (long) option
+  stays fully visible, and ▲/▼ in the header show when there's more above/below. (The long question
+  itself was already readable in the conversation/read view.)
+
+## 1.0.27 — 2026-06-29
+- **"→ next question" advance fixed properly.** 1.0.26 moved the cursor up by a fixed over-count
+  before pressing Right, but the prompt's option list **wraps around** — so overshooting cycled the
+  cursor back onto a special row and Right was swallowed again (the cursor "flew through all the rows"
+  and nothing advanced). It now steps up by the *exact* tracked cursor position, landing precisely on
+  option 1 (works whether the list wraps or clamps, and can never overshoot), then presses Right.
+
+## 1.0.26 — 2026-06-29
+- **Multi-select "→ next question" now actually advances**, and **free-text answers are no longer
+  cleared.** Diagnosed from the backend's keystroke audit log + on-device captures: the prompt only
+  cycles its question tabs (Right) from a *normal* numbered option — on the special "Type something" /
+  "Next" / "Chat about this" rows the keystroke is swallowed. After you typed a free-text answer the
+  cursor was sitting on "Type something", so "→ next question" did nothing. The app now walks the
+  cursor up onto a normal option before advancing. Separately, a free-text answer in a multi-select
+  was being submitted with a trailing Enter that *unchecked* it — multi-select answers are now typed
+  without that Enter (single-select still confirms with Enter), so your typed answer sticks.
+
+## 1.0.24 — 2026-06-29
+- **Multi-question controls simplified to match how the prompt actually works.** Single-select
+  questions auto-advance when you answer (no button needed). Multi-select questions get a single
+  "→ next question" button. And you submit by tapping the real **"Submit answers"** option on the
+  final screen — the old "» submit answers" shortcut is gone (it was navigating in a way that could
+  clear a typed answer).
+
+## 1.0.23 — 2026-06-29
+- **Multi-select wrong-toggle FIXED at the root.** Captured the prompt's behavior key-by-key: when
+  the move (Down) and the toggle (Space) are sent together, the prompt applies the toggle to the row
+  it was on BEFORE the move registered — so it ticked/cleared the wrong option. The app now sends the
+  keystrokes one at a time with a small gap, so each cursor move lands before the toggle. This also
+  makes single-select and the multi-question Submit step more reliable.
+
+## 1.0.22 — 2026-06-29
+- **Multi-select navigation reworked (again) based on the real terminal behavior.** The previous
+  version sent a keystroke on every swipe, which overshot because the G2 pad fires a burst of swipe
+  events — so the cursor jumped several rows. Now a swipe just moves the highlight, and the tap moves
+  the prompt's cursor to it in one go and toggles. The off-by-one from before (the app assumed the
+  prompt's cursor jumps down after a tick — it doesn't) is also fixed. Swipe to the option, tap to
+  tick; the highlight stays where you tick.
+
+## 1.0.21 — 2026-06-29
+- **Multi-select highlight now matches the prompt.** After you tick an option, the on-glasses ▶ stays
+  on that option (the prompt's cursor stays put too) instead of jumping ahead a row — so the highlight
+  no longer drifts out of sync and every following swipe lands where you expect. Move to the next
+  option with a swipe.
+
+## 1.0.20 — 2026-06-29
+- **Multi-select reworked so it ticks the RIGHT option.** Swiping now moves the prompt's own cursor
+  one step at a time (in lockstep with the highlight), and a tap toggles exactly the highlighted row
+  — instead of computing a relative "move N rows" that drifted and ticked/cleared the wrong items.
+- This should also stop the occasional jump to the conversation mid-question — that was a wrong tap
+  landing on "Chat about this" (which exits the prompt). With correct toggling it won't happen.
+
+## 1.0.19 — 2026-06-29
+- **Robustness pass** (from a multi-agent code review of the menu/conversation handling):
+  - If a keystroke to the session fails, the on-glasses state no longer sticks in a wrong/optimistic
+    state — it reverts to what's really on screen.
+  - Cancelling a "Type something" answer (or leaving it empty) now properly closes that text field in
+    the session instead of leaving it open.
+  - Options whose label starts with a number (e.g. "30 minutes", "2 hours") are no longer dropped.
+  - "Type something" no longer shows a stray empty checkbox in a multi-select question.
+  - Further hardened prompt detection so quoted menus / numbered lists in the conversation can't leak
+    into a real prompt's options or question (extends the 1.0.17/1.0.18 fixes).
+  - A double-tap when you're already at the bottom no longer wastes a tap.
+
+## 1.0.18 — 2026-06-29
+- **Multi-select no longer ticks the wrong item.** After you tick one, the prompt moves its cursor
+  down by one; the app now follows that, so the next tap hits the item you expect (and you can
+  tap-tap straight down the list, or swipe to jump).
+- **The question shown above the options is always the real one** now, even if the conversation just
+  above happened to quote a menu (that was making the "question" pick up chat text).
+
+## 1.0.17 — 2026-06-29
+- **The app no longer mistakes chat text for a live prompt.** If a conversation *talks about* menus
+  (numbered lists, the word "Submit", checkboxes — e.g. a session discussing this very feature), the
+  app used to think a prompt was active and lock the view so you couldn't scroll. It now only treats
+  it as a prompt when a real one is at the bottom of the screen. (Mostly affected testing in a
+  session that was literally about menus; real coding sessions wouldn't hit it.)
+
+## 1.0.16 — 2026-06-29
+- **No more flashing into the conversation when answering.** The read view of a multi-question prompt
+  now starts right at the question, instead of sometimes landing on earlier conversation text that
+  shares the screen.
+- **Multi-select feels instant.** Tapping a topping flips its checkbox immediately (it used to wait
+  ~1s for a refresh), so you can clearly see what's selected as you go.
+
+## 1.0.15 — 2026-06-29
+- **Multi-select checkboxes fixed.** A checked option no longer shows a doubled `[ ] [ ]` — it now
+  shows a single `[x]`. (Claude marks a checked box with a ✔ glyph the parser wasn't recognizing, so
+  it leaked through and the firmware font draws ✔ blank.)
+- **The question now shows in the answer view too**, above the options — no need to flip back to the
+  read view to remember what's being asked. (Long questions show up to two lines.)
+- Free-text ("Type something") now also opens the keyboard from a multi-select question (before, it
+  only toggled like a checkbox).
+
+## 1.0.14 — 2026-06-29
+- **Conversation view stays put sensibly.** While you haven't manually scrolled, it now follows the
+  latest prompt — so after a multi-question prompt (or any prompt) closes, it no longer shows a
+  stale, scrolled-back position (this is what made a typed/free-text answer "jump somewhere else").
+  Double-tap still works the same: jump to the recent prompt, then to the live edge, then out to the
+  list. If you scroll manually, your spot is kept (and a reopen resumes there).
+
+## 1.0.13 — 2026-06-29
+- **Multi-question prompts no longer jump to old conversation.** Each question's read view now opens
+  right on the question (the tab strip + question + options) instead of scrolling up into the earlier
+  conversation that shares the screen. You can still swipe up to see that context if you want.
+
+## 1.0.12 — 2026-06-29
+- **Free-text answers ("Type something") fixed.** After you type your answer it now goes into the
+  question's text field and returns you to the prompt — previously it was treated like a brand-new
+  message and flipped to the "working…" conversation screen. The phone keyboard for this is labelled
+  "Type your answer to the question".
+
+## 1.0.11 — 2026-06-29
+- **Multi-question prompts: each next question opens in the read view as you advance**, so you can
+  actually read it before answering (1.0.10 left you on the compact answer list and you had to
+  double-tap to read the next question). Answering an option still keeps you put — only moving to a
+  new question brings up its read view.
+
+## 1.0.10 — 2026-06-29
+- **Multi-question prompts fixed to match how Claude really renders them.** Tested against the live
+  prompt: questions are now answered by moving the highlight and confirming (the prompt's own keys
+  are "Enter to select · arrow keys to navigate" — not number keys), and a multi-question prompt
+  opens straight into the answer view and STAYS on each question as you go (it no longer jumps back
+  to the prompt text after every answer). The READ view shows the real question tab strip + Submit.
+- **One more line of conversation.** The scroll arrows + position indicator moved up into the title
+  row, so the conversation/output view now shows 9 lines instead of 8 (no separate bottom bar).
+- ⚠ Still verify on-device: advancing between questions (→ next question) and submitting (» submit
+  answers) use keys that aren't officially documented.
+
+## 1.0.9 — 2026-06-29
+- **Multi-question prompts (AskUserQuestion) can now be answered end-to-end.** When Claude asks
+  several questions at once (a tab strip ending in *Submit*), the glasses now show the tab strip,
+  let you answer each question, move on with **→ next question**, and finish with **» submit
+  answers** — instead of only handling the first question. Free-text ("Type something") opens the
+  phone keyboard (or voice) and types straight into that field.
+- Picking an answer in a multi-question prompt no longer risks an early submit (it selects without
+  pressing Enter; you submit explicitly).
+- ⚠ The exact keys Claude's multi-question prompt uses aren't documented, so this flow is built to
+  the observed behavior and should be confirmed on the real glasses; single-question + Yes/No
+  prompts are unchanged.
+
 ## 1.0.8 — 2026-06-29
 - **Conversations read much better.** Code blocks are kept VERBATIM with a │ left rail — they used
   to be silently corrupted (`**kwargs`→`kwargs`, `a * b`→`a  b`, `__init__`→`init`); section

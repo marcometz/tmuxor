@@ -14,6 +14,7 @@ function PhoneInput() {
   let ctx: { label: string; ph: string; cancel: () => void; status: string } | null = null
   if (s.newPhase === 'tagvoice') ctx = { label: 'New tag name', ph: 'e.g. api', cancel: cancelNewSession, status: s.newStatus }
   else if (s.newPhase === 'listening') ctx = { label: 'Folder for the new session', ph: 'e.g. my-project', cancel: cancelNewSession, status: s.newStatus }
+  else if (s.menuFreeText) ctx = { label: 'Type your answer to the question', ph: 'your answer…', cancel: cancelInput, status: s.status }
   else if (s.activePaneN && s.phase === 'listening') ctx = { label: 'Type a message for this session', ph: 'your prompt…', cancel: cancelInput, status: s.status }
   if (!ctx) return null
   // store-controlled (value = s.typingText) so every keystroke echoes live to the glasses

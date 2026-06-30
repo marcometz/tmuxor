@@ -5,7 +5,7 @@ import {
   getSnapshot, subscribe, refresh, noteActivity, idleTick,
   openPane, closePane, scrollDetail, startVoice, stopVoice, cancelInput,
   redoVoice, sendNow, scrollConfirm,
-  pickMenuOption, submitMenu, scrollMenu, menuToPick, menuToRead, jumpToLatest,
+  pickMenuOption, menuTabNext, submitMenu, scrollMenu, menuToPick, menuToRead, jumpToLatest,
   startNewSession, moveNewTag, chooseNewTag, stopNewTagVoice, stopNewVoice, retryNewVoice, createNewSession, cancelNewSession,
   type AppState,
 } from './store'
@@ -19,7 +19,7 @@ const ctx: Ctx = {
   exitApp,
   openPane, closePane, scrollDetail, startVoice, stopVoice, cancelInput,
   redoVoice, sendNow, scrollConfirm,
-  pickMenuOption, submitMenu, scrollMenu, menuToPick, menuToRead, jumpToLatest,
+  pickMenuOption, menuTabNext, submitMenu, scrollMenu, menuToPick, menuToRead, jumpToLatest,
   startNewSession, moveNewTag, chooseNewTag, stopNewTagVoice, stopNewVoice, retryNewVoice, createNewSession, cancelNewSession,
 }
 

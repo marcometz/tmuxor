@@ -19,7 +19,7 @@ Even Hub.
 | | |
 |---|---|
 | ![Fleet list](store-assets/screenshots/01-fleet-list.png)<br>**Fleet** — your sessions, sorted by what needs you (! waiting · ● working · ○ idle). | ![Conversation](store-assets/screenshots/02-conversation.png)<br>**Conversation** — real prompts + replies, opening at the latest question. |
-| ![New session](store-assets/screenshots/03-new-session-tag.png)<br>**New session** — pick a project tag, then speak the folder. | ![Voice review](store-assets/screenshots/04-voice-review.png)<br>**Voice** — review the transcription (and its cost) before sending. |
+| ![Approve command](store-assets/screenshots/03-approve-command.png)<br>**Approve** — read the full command on the glasses, then tap Yes/No. | ![New session](store-assets/screenshots/04-new-session.png)<br>**New session** — pick a project tag, then speak the folder. |
 
 *576×288 monochrome-green glasses display. Images use demo data.*
 

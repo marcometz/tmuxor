@@ -10,8 +10,11 @@ export type Phase = 'view' | 'listening' | 'confirm'
 const SLOTS = 9
 const DEBUG_VOICE = !!import.meta.env.VITE_DEBUG_VOICE
 
-export interface MenuOption { num: number; title: string; current: boolean; checked: boolean }
-export interface MenuState { question: string; options: MenuOption[]; multi: boolean; cursorIndex: number }
+export interface MenuOption { num: number; title: string; current: boolean; checked: boolean; free: boolean; desc?: string }
+// `ask` = an AskUserQuestion prompt (multi-tab: several questions + a Submit tab). Those need
+// per-question picking, manual tab-advance (→) and an explicit Submit, unlike a plain Yes/No prompt.
+// `tabCount` = number of tabs in the strip (questions + Submit) — used to jump to the Submit tab.
+export interface MenuState { question: string; options: MenuOption[]; multi: boolean; cursorIndex: number; ask: boolean; tabCount: number }
 
 export interface AppState {
   panes: Pane[]
@@ -27,6 +30,7 @@ export interface AppState {
   menuPhase: 'read' | 'pick'  // permission prompt: READ the command first, then PICK the option
   menuBody: string[]          // the command/diff/context being approved (pre-wrapped), for READ
   menuScroll: number          // scroll position within menuBody
+  menuFreeText: boolean       // typing a free-text answer ("Type something") INTO the open menu field
   scroll: number
   atBottom: boolean
   working: boolean
@@ -59,7 +63,7 @@ export interface AppState {
 let state: AppState = {
   panes: [], loading: true, error: null, listIndex: 0,
   activePaneN: null, activeLabel: '', activeIsClaude: false, activeCwd: '',
-  lines: [], menu: null, menuPhase: 'read', menuBody: [], menuScroll: 0, scroll: 0, atBottom: true, working: false, activity: '', voiceOn: true, voiceChecked: [], asleep: false,
+  lines: [], menu: null, menuPhase: 'read', menuBody: [], menuScroll: 0, menuFreeText: false, scroll: 0, atBottom: true, working: false, activity: '', voiceOn: true, voiceChecked: [], asleep: false,
   phase: 'view', draft: '', draftKind: null, busy: false, status: '', typingText: '', draftLines: [], confirmScroll: 0, lastCost: 0, totalCost: 0,
   newPhase: 'tag', newText: '', newTags: [], newTagIndex: 0, newTag: '', newPath: '', newCreate: false, newStatus: '', newPaneN: null,
 }
@@ -68,7 +72,7 @@ export function getSnapshot() { return state }
 export function subscribe(l: () => void) { listeners.add(l); return () => { listeners.delete(l) } }
 function set(p: Partial<AppState>) { state = { ...state, ...p }; listeners.forEach((l) => l()) }
 
-const VIEW_SLOTS = 8  // conversation/shell view keeps a footer line -> 8 content lines (menu/confirm use SLOTS=9)
+const VIEW_SLOTS = 9  // conversation/shell view: scroll arrows + position moved into the header, so 9 content lines, no footer
 const maxScroll = (n: number, vis: number = SLOTS) => Math.max(0, n - vis)
 
 // --- idle screen-sleep: blank the HUD after inactivity; wake on a gesture (AppGlasses bumps
@@ -79,8 +83,10 @@ export function noteActivity() { lastActivity = Date.now(); if (state.asleep) se
 export function idleTick() {
   const sec = getIdleSleepSec()
   // never sleep mid-input: only the passive view/list state (phase 'view') is sleepable; while
-  // listening/reviewing, voice/typing activity also bumps lastActivity (see beginMic/setTypingText)
-  if (!sec || state.asleep || state.phase !== 'view') return
+  // listening/reviewing, voice/typing activity also bumps lastActivity (see beginMic/setTypingText).
+  // Also never sleep while a live prompt (menu READ/PICK) is open — blanking it would swallow the
+  // answer/approve tap and the prompt is exactly "needs your input".
+  if (!sec || state.asleep || state.phase !== 'view' || state.menu) return
   if (Date.now() - lastActivity >= sec * 1000) set({ asleep: true })
 }
 
@@ -103,22 +109,58 @@ export async function refresh() {
 
 // --- detect an interactive option menu in the captured screen ---
 function parseMenu(raw: string[]): MenuState | null {
+  // GATE: only a LIVE prompt counts — its footer ("Enter to select…", "(esc)", …) sits at the BOTTOM
+  // of the screen. When the session is idle the bottom is the Claude input box instead, so this
+  // rejects conversation scrollback that merely QUOTES a menu (tab strips, "❯ 1.", "Submit" — common
+  // when the chat is ABOUT menus), which would otherwise lock the view onto that quoted text.
+  const tailLines = raw.map((l) => l.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').trim()).filter(Boolean).slice(-5)
+  // a live prompt ends in EITHER a footer (AskUserQuestion) OR a numbered option (permission / plan /
+  // trust) at the very bottom; when idle, the bottom is the input box, so neither holds -> reject
+  // (and conversation scrollback quoting a menu, which has the input box below it, is rejected too).
+  const footerAtBottom = /to navigate|to select|to submit|esc to cancel|\(esc\)|enter to (?:select|confirm|submit|continue|proceed)|tab\/arrow|space to (?:toggle|select)/i.test(tailLines.join('\n'))
+  const optionAtBottom = tailLines.slice(-2).some((l) => /^[│|]?\s*[❯›]?\s*\d+[.)]\s/.test(l))
+  if (!footerAtBottom && !optionAtBottom) return null
+  // ...but if the very bottom is clearly the idle Claude input box, it's NOT a live prompt — a footer
+  // QUOTED a few lines up (within the 5-line window) could otherwise sneak past the check above.
+  if (/\? for shortcuts|shift\+tab|auto-?accept edits|^[│|]\s*>|^>\s*$/im.test(tailLines.slice(-3).join('\n'))) return null
   // An option line: an optional box-border │, an optional ❯/› cursor, a number, then the label.
   // (capture-pane's -J already rejoined soft-wrapped options, so each option is one logical line.)
-  const OPT = /^\s*[│|]?\s*(❯|›|>|\*)?\s*(\d+)[.)]\s*(\[([ xX*])\]\s*)?(.+?)\s*$/
+  // The checkbox content is ' ' (unchecked) or x/X/*/✓/✔ (checked) — Claude renders a CHECKED
+  // multi-select box as `[✔]` (U+2714), so ✓/✔ MUST be in the class or it isn't recognized as a box
+  // and the glyph leaks into the title (then we'd prepend our own [ ] → a doubled "[ ] [ ]").
+  const OPT = /^\s*[│|]?\s*(❯|›|>|\*)?\s*(\d+)[.)]\s*(\[([ xX*✓✔])\]\s*)?(.+?)\s*$/
   const isCursor = (l: string) => /^\s*[│|]?\s*[❯›]\s*\d+[.)]/.test(l)  // a real TUI cursor (not >/*/list)
-  const opts: { i: number; num: number; title: string; cur: boolean; box: boolean; checked: boolean }[] = []
+  // AskUserQuestion shows a tab strip ending in Submit, e.g.
+  //   ←  ☐ Saturday AM  ☐ Superpower  ☐ Dream trip  ✔ Submit  →
+  // That strip (checkbox glyphs + the word Submit) uniquely marks this prompt type at every stage,
+  // including the final Submit screen (which has NO numbered options of its own). The number of
+  // [☐☑✔] markers = the tab count (questions + Submit), used to jump to the Submit tab.
+  // The REAL tab strip is the LAST checkbox+Submit line (the live prompt sits at the bottom of the
+  // screen); earlier matches can be conversation scrollback that merely quotes "☐ … ✔ Submit".
+  let tabLine = '', tabIdx = -1
+  for (let i = raw.length - 1; i >= 0; i--) if (/\bsubmit\b/i.test(raw[i]) && /[☐☑✔]/.test(raw[i])) { tabLine = raw[i]; tabIdx = i; break }
+  const ask = !!tabLine
+  const tabCount = (tabLine.match(/[☐☑✔]/g) || []).length || 1
+  const FREE = /\btype something\b|^\s*other\s*$|^\s*custom\b/i
+  const opts: { i: number; num: number; title: string; cur: boolean; box: boolean; checked: boolean; free: boolean }[] = []
   raw.forEach((l, i) => {
     const m = l.match(OPT)
-    if (m && m[5] && !/^\d/.test(m[5])) opts.push({ i, num: Number(m[2]), title: m[5].trim(), cur: isCursor(l), box: !!m[3], checked: /[xX*]/.test(m[4] || '') })
+    // Skip a PURE-numeric title (a stray "2024" / version line, not a real label) but KEEP "30 minutes";
+    // for an ask, also ignore option lines ABOVE the live tab strip (chat scrollback quoting a prompt).
+    if (m && m[5] && !/^\d+(?:[.)]\d+)*\s*$/.test(m[5]) && (!ask || i > tabIdx)) opts.push({ i, num: Number(m[2]), title: m[5].trim(), cur: isCursor(l), box: !!m[3], checked: /[xX*✓✔]/.test(m[4] || ''), free: FREE.test(m[5]) })
   })
-  if (opts.length < 2) return null
+  // Final Submit screen of an AskUserQuestion: the tab strip is there but no numbered options — give
+  // a Submit-only menu so the user can still send (an Enter on the active Submit tab submits).
+  if (opts.length < 2) return ask ? { question: 'review & submit', options: [], multi: false, cursorIndex: 0, ask: true, tabCount } : null
   // ANCHOR the option list to the ❯ cursor: keep only the consecutive-numbered run that contains
   // the cursor. This rejects "phantom" options from a numbered list in the plan / scrollback ABOVE
   // the prompt (no cursor, and doesn't chain into the real run that starts at 1). Without a cursor,
   // fall back to the LAST run starting at 1 (the live prompt sits at the bottom) + require a footer.
   let lo: number, hi: number
-  const ci = opts.findIndex((o) => o.cur)
+  // anchor to the LAST cursor option — the live prompt is at the BOTTOM, so if scrollback above also
+  // shows a "❯ 1." (e.g. the chat quoting a prompt), the bottom-most cursor is the real one.
+  let ci = -1
+  for (let k = opts.length - 1; k >= 0; k--) if (opts[k].cur) { ci = k; break }
   if (ci >= 0) {
     lo = hi = ci
     while (lo > 0 && opts[lo - 1].num === opts[lo].num - 1) lo--
@@ -133,12 +175,44 @@ function parseMenu(raw: string[]): MenuState | null {
   }
   const block = opts.slice(lo, hi + 1)
   if (block.length < 2) return null
-  const q = (raw.find((l) => l.includes('?') && l.trim().length > 8) || '').trim().replace(/^[│|❯>›*\s]+/, '')
+  // Question text: for an AskUserQuestion it's the line(s) between the tab strip and the first option
+  // (it may end in ':' not '?', so don't require a '?'); otherwise fall back to the first '?' line
+  // (permission prompts say "Do you want to proceed?").
+  let q = ''
+  if (ask) {
+    // scan UP from the first option to the NEAREST tab strip above it (the real prompt's strip, just
+    // above the question) — NOT the first strip in the capture, which may be chat scrollback quoting
+    // one (then the "question" would swallow that conversation text).
+    let tabI = -1
+    for (let i = opts[lo].i - 1; i >= 0; i--) if (/[☐☑✔]/.test(raw[i]) && /\bsubmit\b/i.test(raw[i])) { tabI = i; break }
+    if (tabI >= 0) q = raw.slice(tabI + 1, opts[lo].i)
+      .map((l) => l.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').trim())
+      .filter((l) => l && !/^[\s─-╿=_·.\-]+$/.test(l))
+      .join(' ')
+  }
+  // fallback (permission/plan): the nearest '?' line ABOVE the first option — scanning up (bounded)
+  // avoids grabbing a '?' from chat scrollback far above.
+  if (!q) for (let i = opts[lo].i - 1; i >= 0 && i >= opts[lo].i - 12; i--) {
+    const t = raw[i].replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').trim()
+    if (t.includes('?') && t.length > 8) { q = t.replace(/^[│|❯>›*\s]+/, ''); break }
+  }
   return {
     question: q,
-    options: block.map((o) => ({ num: o.num, title: o.title, current: o.cur, checked: o.checked })),
+    options: block.map((o, k) => {
+      // capture the option's DESCRIPTION (the indented prose line(s) right after it, before the next
+      // option) so the READ view can be rebuilt from clean parsed text — wrapped to the glasses width
+      // instead of inheriting the terminal's narrower wrap points.
+      const endI = k + 1 < block.length ? block[k + 1].i : o.i + 4
+      const desc = raw.slice(o.i + 1, Math.min(endI, raw.length))
+        .map((l) => l.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/^[│|\s]+/, '').trim())
+        .filter((l) => l && !/^[─\-═_·.]+$/.test(l) && !/to navigate|to select|esc to cancel|tab\/arrow|^next$|^chat about this\.?$/i.test(l) && !OPT.test(l))
+        .join(' ')
+      return { num: o.num, title: o.title, current: o.cur, checked: o.checked, free: o.free, desc }
+    }),
     multi: block.some((o) => o.box),
     cursorIndex: Math.max(0, block.findIndex((o) => o.cur)),
+    ask,
+    tabCount,
   }
 }
 
@@ -162,7 +236,10 @@ function cleanLines(raw: string[]): string[] {
 // Word-wrap to the full display width (pixel-accurate via pretext): break at spaces,
 // only hard-breaking a single word wider than a row. `indent` is prepended to every
 // continuation line (hanging indent) so wrapped bullets/prompts stay visually aligned.
-const WRAP_PX = 568
+// Wrap a touch under the 576px panel: at ~568 a filled line sat right at the device's usable edge,
+// so the firmware re-wrapped it on screen, leaving a stray short remainder ("wrapped early
+// sometimes"). 548 matches the answer view's proven-good option width and keeps a safe margin.
+const WRAP_PX = 548
 function wrapPx(line: string, indent = ''): string[] {
   if (getTextWidth(line) <= WRAP_PX) return [line]
   const out: string[] = []
@@ -210,6 +287,13 @@ const DIVIDER = (() => { let s = ''; while (getTextWidth(s + '· ') <= 520) s +=
 function hangIndent(line: string): string {
   const m = line.match(/^(\s*)(•|▶|\d+\.)\s/)
   return m ? ' '.repeat(m[1].length + 2) : ''
+}
+// continuation indent for a wrapped MENU/READ line: align under the option text, past any cursor
+// (❯/›/▶), number (1.) and checkbox ([ ]) prefix — so a long option's wrapped lines stay aligned
+// under the option (matching the answer view) instead of dropping back to the left margin.
+function menuHangIndent(line: string): string {
+  const m = line.match(/^(\s*(?:[❯›▶]\s+)?(?:\d+[.)]\s+)?(?:\[.\]\s+)?)/)
+  return ' '.repeat(Math.min(m ? m[1].length : 0, 8))
 }
 
 // claude pane: render the real conversation for easy scanning —
@@ -265,10 +349,13 @@ function buildView() {
   }
   const lines = raw.length ? raw : ['(no replies yet)']
   const ms = maxScroll(lines.length, VIEW_SLOTS)
-  // when not following the bottom, PRESERVE the scroll (incl. a jump-to-prompt over-scroll up to
-  // len-1) so a poll doesn't yank it back; short content (fits on screen) never scrolls.
   const cap = lines.length > VIEW_SLOTS ? Math.max(0, lines.length - 1) : 0
-  set({ lines, scroll: state.atBottom ? ms : Math.min(state.scroll, cap) })
+  // atBottom -> live edge. Otherwise: if the user has NOT manually scrolled, FOLLOW the latest prompt
+  // — so the view never gets stuck at a stale line after the conversation grows underneath a menu
+  // (e.g. while an AskUserQuestion is open). If they HAVE scrolled, preserve their spot so a poll
+  // doesn't yank it back. (jumpToLatest double-tap still stages prompt -> end -> list on top of this.)
+  const scroll = state.atBottom ? ms : (userScrolled ? Math.min(state.scroll, cap) : Math.min(lastPromptIndex(lines), cap))
+  set({ lines, scroll })
 }
 function applyConversation(turns: Turn[], working: boolean) {
   convoLines = renderTurns(turns)
@@ -282,7 +369,9 @@ function applyConversation(turns: Turn[], working: boolean) {
     // deliberately scrolled UP into the history AND no newer question arrived since.
     const r = pendingRestore; pendingRestore = null
     const newQuestion = convoPromptCount > r.promptCount
-    if (r.scrolledAway && !newQuestion) set({ working, atBottom: r.atBottom, scroll: r.scroll })
+    // restoring a scrolled-up spot counts as "manually scrolled" so buildView preserves it (doesn't
+    // re-follow the latest prompt and clobber the resume).
+    if (r.scrolledAway && !newQuestion) { userScrolled = true; set({ working, atBottom: r.atBottom, scroll: r.scroll }) }
     else set({ working, atBottom: false, scroll: lastPromptIndex(convoLines) })
   } else {
     set({ working })
@@ -303,8 +392,35 @@ function cleanActivity(raw: string[]): string {
 // keep the option lines as anchors), minus only TUI chrome (handled by cleanLines) and the
 // navigation-hint line. Pre-wrapped to the display width. PICK then chooses among the options.
 function menuBodyLines(raw: string[]): string[] {
-  const navRe = /to navigate|to select|✔ ?submit|esc to cancel/i
-  return softWrap(cleanLines(raw).filter((l) => !navRe.test(l)))
+  const isTabStrip = (l: string) => /[☐☑✔]/.test(l) && /\bsubmit\b/i.test(l)
+  // For an AskUserQuestion the capture has conversation scrollback ABOVE the prompt; start the body
+  // at the tab strip (the LAST such line = the live prompt at the bottom) so READ shows the PROMPT,
+  // never the scrollback. A permission prompt has no tab strip -> keep the full body (the command to
+  // read sits above the options).
+  let tabI = -1
+  for (let i = raw.length - 1; i >= 0; i--) if (isTabStrip(raw[i])) { tabI = i; break }
+  const src = tabI >= 0 ? raw.slice(tabI) : raw
+  // Drop the keyboard-hint FOOTER (its keys are gesture-driven here) but KEEP the tab strip — the
+  // real strip has arrow glyphs AND "Submit", so it would match the arrow nav pattern; exempt it.
+  const navRe = /to navigate|to select|to submit|esc to cancel|(?:←|→|↑|↓).*(?:switch|select|toggle|confirm|cancel|submit|navigate)/i
+  const kept = cleanLines(src).filter((l) => isTabStrip(l) || !navRe.test(l))
+  const out: string[] = []
+  for (const l of kept) out.push(...(l === '' ? [''] : wrapPx(l, menuHangIndent(l))))
+  return out.length ? out : ['(no output)']
+}
+// READ body for an AskUserQuestion, rebuilt from the PARSED prompt (clean question + option labels +
+// descriptions) and wrapped to the glasses width — NOT the raw capture. The raw lines are pre-wrapped
+// at the terminal's (narrower) width, so on the glasses they broke at the wrong spots; rebuilding from
+// parsed text makes the read view fill the width consistently, exactly like the answer view.
+function buildAskBody(m: MenuState): string[] {
+  const out = wrapPx(m.question || 'review & submit')
+  for (const o of m.options) {
+    out.push('')
+    const label = (m.multi && !o.free) ? `${o.checked ? '[x]' : '[ ]'} ${o.title}` : `${o.num}. ${o.title}`
+    out.push(...wrapPx(label, menuHangIndent(label)))
+    if (o.desc) out.push(...wrapPx('   ' + o.desc, '   '))
+  }
+  return out
 }
 function updateLive(text: string) {
   const raw = text.split('\n')
@@ -319,14 +435,24 @@ function updateLive(text: string) {
   const reRender = state.working && activity !== state.activity
   const patch: Partial<AppState> = { menu, activity }
   if (menu) {
-    const body = menuBodyLines(raw)
+    // AskUserQuestion: rebuild the READ body from clean parsed text (wraps to the glasses width).
+    // Permission / plan prompts keep the raw capture (the exact command/diff matters verbatim).
+    const body = (menu.ask && menu.options.length) ? buildAskBody(menu) : menuBodyLines(raw)
     patch.menuBody = body
-    // a NEW prompt (menu just appeared, or its question changed) -> open READ anchored at the
-    // question + options (the actionable part); the command/diff context sits above (scroll up to it).
+    // Open the READ view whenever a NEW question appears — the first prompt, AND each next question
+    // of an AskUserQuestion as you advance (→ next question) — so you read it before answering.
+    // Re-renders of the SAME question (e.g. right after you select an option) keep your current
+    // phase, so answering an option never bounces you out of PICK.
     if (!state.menu || state.menu.question !== menu.question) {
       patch.menuPhase = 'read'
+      // The capture is the whole terminal screen, so conversation scrollback sits ABOVE the prompt.
+      // Anchor READ at the actionable part, NOT line 0 (which would show old conversation): the tab
+      // strip for an AskUserQuestion, or the numbered-option list for a permission prompt.
+      // menuBodyLines already slices an ask body to START at the tab strip, so READ opens at the top
+      // (scroll 0); a permission prompt keeps its full body, so anchor at the numbered options (the
+      // command/diff to read sits above them).
       const optIdx = body.findIndex((l) => /^\s*(❯|›|>|\*)?\s*\d+[.)]\s/.test(l))
-      patch.menuScroll = optIdx > 0 ? Math.max(0, optIdx - 3) : 0
+      patch.menuScroll = menu.ask ? 0 : (optIdx > 0 ? Math.max(0, optIdx - 3) : 0)
     }
   }
   set(patch)
@@ -340,7 +466,7 @@ export function openPane(n: string, label: string, isClaude: boolean, cwd: strin
   closeStream(); stopAnswers()
   convoLines = []
   set({ activePaneN: n, activeLabel: label, activeIsClaude: isClaude, activeCwd: cwd, listIndex,
-        lines: ['…'], menu: null, menuPhase: 'read', menuBody: [], menuScroll: 0, scroll: 0, atBottom: true, working: false, activity: '', phase: 'view', draft: '', draftKind: null, status: '', typingText: '' })
+        lines: ['…'], menu: null, menuPhase: 'read', menuBody: [], menuScroll: 0, menuFreeText: false, scroll: 0, atBottom: true, working: false, activity: '', phase: 'view', draft: '', draftKind: null, status: '', typingText: '' })
   if (isClaude) {
     const mem = paneMem.get(n)
     jumpToPrompt = !mem            // first time -> latest question
@@ -421,35 +547,77 @@ export function jumpToLatest(): boolean {
   if (state.activeIsClaude) {
     const promptPos = lastPromptIndex(state.lines)
     if (state.scroll !== promptPos) { set({ scroll: promptPos, atBottom: false }); return true }
+    // already ON the prompt AND it's at/past the live edge (nothing below) -> the prompt stage and
+    // the live-edge stage coincide, so don't burn a double-tap on a no-op set; leave to the list.
+    if (promptPos >= ms) return false
   }
   set({ scroll: ms, atBottom: true })
   return true
 }
 
 // --- menu mode: drive the real TUI selection with keystrokes ---
+// Send keys ONE AT A TIME with a gap. The prompt's TUI (Ink/React) processes a BATCHED "Down Space"
+// by applying the Space to the row it was on BEFORE the Down's cursor move re-renders (verified
+// on-device: it toggled the wrong row). Spacing them out lets each cursor move land before the next
+// key. ~150ms matches the backend's own send_text settle delay.
+async function sendKeysSpaced(n: string, keys: string[]) {
+  for (let i = 0; i < keys.length; i++) {
+    if (i) await new Promise((r) => setTimeout(r, 150))
+    await sendKeys(n, [keys[i]])
+  }
+}
+// DELTA nav: a swipe only moves the LOCAL ▶ highlight (no keystroke). On TAP we move the prompt's ❯
+// from where it is (cursorIndex) to the highlighted row and act. Robust to the G2 pad emitting a
+// BURST of swipe events (the burst just moves ▶; the tap reconciles the delta).
 export async function pickMenuOption(targetIdx: number) {
   const m = state.menu, n = state.activePaneN
   if (!m || !n) return
-  if (m.multi) {
-    // multi-select: move to the row (relative to the live cursor) and toggle with Space, staying
-    // in the menu. Optimistically advance our local cursor so back-to-back toggles aren't off-by.
-    const delta = targetIdx - m.cursorIndex
-    const keys: string[] = []
-    for (let i = 0; i < Math.abs(delta); i++) keys.push(delta > 0 ? 'Down' : 'Up')
-    keys.push('Space')
+  const opt = m.options[targetIdx]
+  const nav: string[] = []
+  for (let d = targetIdx - m.cursorIndex, i = 0; i < Math.abs(d); i++) nav.push(d > 0 ? 'Down' : 'Up')
+  // The ❯ STAYS where we leave it (verified on-device: no auto-advance after a toggle), so the
+  // optimistic cursorIndex = targetIdx — which keeps the NEXT pick's delta correct. On a FAILED
+  // keystroke restore the pre-pick `m` (the sig-dedup won't otherwise correct an optimistic change).
+  if (opt?.free) {
+    // free-text ("Type something"): move to it + Enter to open its inline input, then the type path.
+    set({ menu: { ...m, cursorIndex: targetIdx }, menuFreeText: true })
+    try { await sendKeysSpaced(n, [...nav, 'Enter']); startVoice() } catch { set({ menu: m, menuFreeText: false }) }
+  } else if (m.multi) {
+    // multi-select: move to the row + Space to toggle; flip the checkbox locally for instant feedback.
+    const options = m.options.map((o, i) => (i === targetIdx ? { ...o, checked: !o.checked } : o))
+    set({ menu: { ...m, cursorIndex: targetIdx, options } })
+    try { await sendKeysSpaced(n, [...nav, 'Space']) } catch { set({ menu: m }) }
+  } else if (m.ask) {
+    // AskUserQuestion single-select: move to the option + Enter to select it (footer: "Enter to
+    // select"; digits are NOT hotkeys). It selects, it does NOT submit (separate Submit-tab step).
     set({ menu: { ...m, cursorIndex: targetIdx } })
-    try { await sendKeys(n, keys) } catch { /* SSE will resync */ }
+    try { await sendKeysSpaced(n, [...nav, 'Enter']) } catch { set({ menu: m }) }
   } else {
-    // single-select: press the option's NUMBER, then Enter to confirm. Absolute (cursor-independent),
-    // so a stale/late SSE cursor can never make us approve the WRONG option — the number jump-selects.
-    const num = String(m.options[targetIdx]?.num ?? targetIdx + 1)
-    try { await sendKeys(n, [num, 'Enter']) } catch { /* SSE will resync */ }
+    // plain single-select (permission Yes/No): the NUMBER then Enter — absolute, so it can never
+    // approve the WRONG option regardless of cursor position.
+    try { await sendKeysSpaced(n, [String(opt?.num ?? targetIdx + 1), 'Enter']) } catch { /* SSE will resync */ }
   }
+}
+// AskUserQuestion: advance to the next question/tab. Right cycles the question tabs — but ONLY from a
+// normal numbered option; on the special "Type something" / "Next" / "Chat about this" rows it's
+// swallowed (verified on-device: after a free-text answer the ❯ sits on "Type something" and Right did
+// nothing). So first walk the ❯ UP to option 1, then Right. Use the EXACT tracked cursor index for the
+// step count — NOT a fixed over-count: the list wraps around, so overshooting cycled the ❯ back onto a
+// special row and Right died again ("cursor flew through all the rows, nothing advanced"). Exactly
+// `cursorIndex` Ups lands on option 1 whether the list wraps or clamps, and can never overshoot.
+export async function menuTabNext() {
+  const n = state.activePaneN, m = state.menu
+  if (!n) return
+  const ups: string[] = Array(Math.max(0, m?.cursorIndex ?? 0)).fill('Up')
+  try { await sendKeysSpaced(n, [...ups, 'Right']) } catch { /* SSE will resync */ }
 }
 export async function submitMenu() {
   const n = state.activePaneN
   if (!n) return
-  try { await sendKeys(n, ['Enter']) } catch { /* ignore */ }
+  // Bare Enter: this is only reached from the option-less Submit screen (the synthetic menu, ❯ on the
+  // submit action) or a plain multi-select's "» Submit". The NORMAL multi-question Submit screen has
+  // a real "Submit answers" option the user taps directly (pickMenuOption), so no tab-jumping here.
+  try { await sendKeys(n, ['Enter']) } catch { /* SSE will resync */ }
 }
 
 // --- voice: glasses mic -> WAV -> server Whisper -> prompt/command ---
@@ -475,7 +643,15 @@ export function startVoice() {
   set({ phase: 'listening', status: '', typingText: '' })
   if (state.voiceOn) beginMic()
 }
-export function cancelInput() { stopMic(); pcm = []; set({ phase: 'view', status: '', draft: '', draftKind: null, typingText: '' }) }
+export function cancelInput() {
+  // close the prompt's opened free-text field so it isn't left stuck in its inline input. Single-select
+  // uses Escape; multi-select toggles the checked free option back off with Space instead (Escape in a
+  // multi-select can cancel the whole prompt). Only when menuFreeText — an ordinary reply has no field.
+  if (state.menuFreeText && state.activePaneN) {
+    sendKeys(state.activePaneN, [state.menu?.multi ? 'Space' : 'Escape']).catch(() => {})
+  }
+  stopMic(); pcm = []; set({ phase: 'view', status: '', draft: '', draftKind: null, typingText: '', menuFreeText: false })
+}
 export function redoVoice() { stopMic(); pcm = []; set({ draft: '', draftKind: null, status: '' }); startVoice() }
 
 export async function stopVoice() {
@@ -493,6 +669,15 @@ export async function stopVoice() {
     text = state.activeIsClaude ? 'summarize what you just did' : 'list files sorted by size'
   }
   if (!text) { set({ phase: 'listening', status: "didn't catch that — speak, then tap" }); beginMic(); return }
+  if (state.menuFreeText) {
+    // spoken free-text answer to an AskUserQuestion: type it INTO the field, back to menu. Multi-select
+    // takes NO trailing Enter — Enter there UNCHECKS the just-typed answer (verified on-device);
+    // single-select takes Enter (confirm + auto-advance).
+    const n = state.activePaneN, multi = !!state.menu?.multi
+    set({ menuFreeText: false, phase: 'view', busy: false, status: '' })
+    if (n) { try { await sendToPane(n, text, !multi) } catch { /* SSE resyncs */ } }
+    return
+  }
   await handleTranscript(text)
 }
 
@@ -529,8 +714,11 @@ export async function sendNow() {
   set({ busy: true, status: 'sending…' })
   try {
     await sendToPane(n, state.draft, true)
-    set({ phase: 'view', atBottom: true, working: true, busy: false, status: '', draft: '', draftKind: null })
-    buildView()
+    // "working…" only applies to a Claude pane (it's processing your prompt); a shell pane has no such
+    // state, so setting working:true + buildView would clobber its live screen with a permanent '⋯'.
+    const claude = state.activeIsClaude
+    set({ phase: 'view', atBottom: true, working: claude, busy: false, status: '', draft: '', draftKind: null })
+    if (claude) buildView()
   } catch { set({ busy: false, status: 'send failed — tap to retry' }) }
 }
 
@@ -565,8 +753,20 @@ export function setTypingText(t: string) {
 export async function submitTypedInput() {
   const t = state.typingText.trim()
   set({ typingText: '' })
-  if (!t) return
   stopMic(); pcm = []
+  if (state.menuFreeText) {
+    // free-text answer to an AskUserQuestion: type it INTO the open field (+Enter) and return to the
+    // menu — NOT a new prompt, so no "working" spinner / conversation switch. The SSE re-renders the
+    // prompt (answer filled / advanced to the next question).
+    const n = state.activePaneN, multi = !!state.menu?.multi
+    set({ menuFreeText: false, phase: 'view', status: '' })
+    // text -> type it into the field. Multi-select takes NO trailing Enter (Enter unchecks the answer);
+    // single-select takes Enter (confirm + advance). empty -> undo: multi unchecks the free option
+    // (Space), single closes the inline field (Escape) — don't leave the prompt stuck in its input.
+    if (n) { try { await (t ? sendToPane(n, t, !multi) : sendKeys(n, [multi ? 'Space' : 'Escape'])) } catch { /* SSE resyncs */ } }
+    return
+  }
+  if (!t) return
   if (state.newPhase === 'tagvoice') {
     set({ newTag: t.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 20) || t, newPhase: 'listening', newStatus: '' })
     if (state.voiceOn) beginMic()
