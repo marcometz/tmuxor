@@ -90,21 +90,47 @@ export function idleTick() {
   if (Date.now() - lastActivity >= sec * 1000) set({ asleep: true })
 }
 
-const ORDER: Record<string, number> = { waiting: 0, working: 1, idle: 2, other: 3 }
+const ORDER: Record<string, number> = { waiting: 0, working: 1, done: 2, idle: 3, other: 4 }
+// Panes that went working -> idle and haven't been opened yet: they stay pinned in a top "done"
+// band (labeled », above plain idle) until the user opens them (openPane clears the mark). Dropped
+// automatically once a pane is no longer idle (worked again / now needs input) or has vanished.
+const finished = new Set<string>()
+function decorateAndSort(raw: Pane[]): Pane[] {
+  return raw
+    .map((p) => ({ ...p, done: finished.has(p.n) }))
+    .sort((a, b) => (ORDER[a.done ? 'done' : a.status] ?? 9) - (ORDER[b.done ? 'done' : b.status] ?? 9)
+                    || a.window - b.window || a.pane_index - b.pane_index)
+}
+// Re-decorate + re-sort the CURRENT panes against `finished` and push if changed — reflects an
+// openPane clear immediately (the list poll only runs while no pane is open, so it can lag 5s).
+function repaintPanes() {
+  const panes = decorateAndSort(state.panes)
+  const sig = JSON.stringify(panes)
+  if (sig !== lastPanesSig) { lastPanesSig = sig; set({ panes }) }
+}
+let fleetGen = 0 // bumped on a backend switch so an in-flight poll from the OLD source is discarded
 export async function refresh() {
+  const gen = fleetGen
   try {
-    const panes = await listPanes(true)
-    panes.sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9) || a.window - b.window || a.pane_index - b.pane_index)
+    const raw = await listPanes(true)
+    if (gen !== fleetGen) return // source changed while this poll was in flight -> stale namespace
+    const present = new Set(raw.map((p) => p.n))
+    for (const n of finished) if (!present.has(n)) finished.delete(n)  // pane gone -> drop the mark
+    for (const p of raw) {
+      if (prevStatus.get(p.n) === 'working' && p.status === 'idle') finished.add(p.n)  // just finished -> pin as "done"
+      else if (p.status !== 'idle') finished.delete(p.n)                                // re-activated -> no longer "done"
+    }
     // wake the sleeping HUD when a session finishes or starts needing you (working -> idle/waiting)
     if (getWakeOnChange() && prevStatus.size) {
-      for (const p of panes) if (prevStatus.get(p.n) === 'working' && (p.status === 'idle' || p.status === 'waiting')) { noteActivity(); break }
+      for (const p of raw) if (prevStatus.get(p.n) === 'working' && (p.status === 'idle' || p.status === 'waiting')) { noteActivity(); break }
     }
-    prevStatus = new Map(panes.map((p) => [p.n, p.status]))
+    prevStatus = new Map(raw.map((p) => [p.n, p.status]))
+    const panes = decorateAndSort(raw)
     const sig = JSON.stringify(panes)
     if (sig !== lastPanesSig) { lastPanesSig = sig; set({ panes, loading: false, error: null }) }  // skip identical re-push
     else if (state.loading || state.error) set({ loading: false, error: null })
     health().then((h) => set({ voiceOn: h.voice, voiceChecked: h.checked || [] })).catch(() => {})
-  } catch (e) { set({ loading: false, error: String(e) }) }
+  } catch (e) { if (gen === fleetGen) set({ loading: false, error: String(e) }) }
 }
 
 // --- detect an interactive option menu in the captured screen ---
@@ -464,6 +490,7 @@ function stopAnswers() { if (answersTimer) { clearInterval(answersTimer); answer
 
 export function openPane(n: string, label: string, isClaude: boolean, cwd: string, listIndex: number) {
   closeStream(); stopAnswers()
+  if (finished.delete(n)) repaintPanes()  // opening a finished session acknowledges it -> unpin from the "done" band
   convoLines = []
   set({ activePaneN: n, activeLabel: label, activeIsClaude: isClaude, activeCwd: cwd, listIndex,
         lines: ['…'], menu: null, menuPhase: 'read', menuBody: [], menuScroll: 0, menuFreeText: false, scroll: 0, atBottom: true, working: false, activity: '', phase: 'view', draft: '', draftKind: null, status: '', typingText: '' })
@@ -491,8 +518,29 @@ export function closePane() {
   // read the jumped-to latest prompt), a reopen re-anchors on the latest prompt.
   if (state.activePaneN && state.activeIsClaude) {
     paneMem.set(state.activePaneN, { scroll: state.scroll, atBottom: state.atBottom, promptCount: convoPromptCount, scrolledAway: userScrolled })
+    // Closing counts as having SEEN this session. The fleet poll is paused while a pane is open, so
+    // prevStatus still holds the pre-open value ('working'); without this, the first post-close poll
+    // would see working->idle for a completion the user just watched and false-pin it in the done
+    // band. Record the live state instead (a pane left mid-work still pins when it finishes later),
+    // and drop any pin added by an asleep-poll while the pane was open.
+    prevStatus.set(state.activePaneN, state.working ? 'working' : 'idle')
+    if (finished.delete(state.activePaneN)) repaintPanes()
   }
   closeStream(); stopAnswers(); stopMic(); set({ activePaneN: null, phase: 'view' })
+}
+
+// Switching backend (tmux <-> herdr) changes the pane-id namespace, so the open pane view, the
+// done-band memory, and per-pane scroll memory all refer to ids that no longer exist on the newly
+// selected source. Drop them and re-poll so nothing straddles two backends (a frozen open view).
+export function resetForSourceChange() {
+  fleetGen++                  // invalidate any in-flight poll from the old source
+  closePane()                 // back to the fleet; stops the open pane's SSE/poll
+  finished.clear()
+  prevStatus = new Map()
+  paneMem.clear()
+  lastPanesSig = ''
+  set({ panes: [], loading: true, error: null })
+  refresh()
 }
 
 // Velocity-aware line scrolling. The G2 pad only emits discrete swipe flicks (and

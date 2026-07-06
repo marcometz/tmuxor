@@ -100,9 +100,10 @@ const listScreen: GlassScreen<AppState, Ctx> = {
     if (s.error) return { lines: [...glassHeader('TMUXor'), line('offline', 'meta'), line(clip(s.error, 26), 'meta')] }
     const wait = s.panes.filter((p) => p.status === 'waiting').length
     const work = s.panes.filter((p) => p.status === 'working').length
-    const idle = Math.max(0, s.panes.length - work - wait)
+    const done = s.panes.filter((p) => p.done).length  // just-finished (working->idle), pinned until opened
+    const idle = Math.max(0, s.panes.length - work - wait - done)
     // one consistent bar; drop zero fields instead of hiding idle when busy
-    const bar = [wait && `${wait}! need you`, work && `${work}● working`, idle && `${idle}○ idle`].filter(Boolean).join(' · ') || 'no sessions'
+    const bar = [wait && `${wait}! need you`, work && `${work}● working`, done && `${done}» done`, idle && `${idle}○ idle`].filter(Boolean).join(' · ') || 'no sessions'
     // row 0 is a pinned "＋ new session" action; panes follow (null = the new-session row)
     const items: (Pane | null)[] = [null, ...s.panes]
     const VIS = 8
@@ -116,7 +117,7 @@ const listScreen: GlassScreen<AppState, Ctx> = {
       // ▶ marks the selected row by TEXT (columns page mode flattens the line highlight style); the
       // 3-space else keeps rows aligned. Marker is inside truncateGlassText so width still fits ~568px.
       formatter: (it, i) =>
-        truncateGlassText(`${i === nav.highlightedIndex ? '▶ ' : '   '}${it ? `${GLYPH[it.status] ?? '·'} ${it.tag}  ${it.label}` : '＋ new session'}`),
+        truncateGlassText(`${i === nav.highlightedIndex ? '▶ ' : '   '}${it ? `${it.done ? '»' : (GLYPH[it.status] ?? '·')} ${it.tag}  ${it.label}` : '＋ new session'}`),
     })
     return { lines: [...glassHeader(`PANELS ${s.panes.length} · p${page}/${pages}`, bar), ...list] }
   },
@@ -143,6 +144,17 @@ const listScreen: GlassScreen<AppState, Ctx> = {
 
 const detailScreen: GlassScreen<AppState, Ctx> = {
   display(s, nav): DisplayData {
+    // The phone can close the pane out from under us (backend switch in Setup -> resetForSourceChange).
+    // The router keeps its own current-screen state, so without this the glasses would stay stranded
+    // on a dead detail view. Render an exit hint; any gesture (action below) returns to the list.
+    if (!s.activePaneN) {
+      return { lines: [
+        ...glassHeader('session closed', 'LIST'),
+        line('Backend was switched on the phone.', 'normal'),
+        line('', 'meta'),
+        line('Tap → back to the session list', 'meta'),
+      ] }
+    }
     const title = clip(s.activeLabel || 'session', 18)
     if (s.phase === 'listening') {
       return { lines: [
@@ -229,6 +241,7 @@ const detailScreen: GlassScreen<AppState, Ctx> = {
     ] }
   },
   action(a, nav, s, ctx) {
+    if (!s.activePaneN) return { screen: 'list', highlightedIndex: 0 } // pane closed under us -> eject
     if (s.phase === 'listening') {
       if (a.type === 'SELECT_HIGHLIGHTED') ctx.stopVoice()
       else if (a.type === 'GO_BACK') ctx.cancelInput()

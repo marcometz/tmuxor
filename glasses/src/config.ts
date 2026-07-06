@@ -10,6 +10,7 @@ const LS_PROJECTS = 'conductor.projectsDir'      // where new sessions' folders 
 const LS_OPENAI_PATH = 'conductor.openaiKeyPath' // optional PATH to the OpenAI key FILE (never the key itself)
 const LS_IDLE_SEC = 'conductor.idleSleepSec'     // seconds the glasses HUD stays on before sleeping (0 = always on)
 const LS_WAKE_CHANGE = 'conductor.wakeOnChange'  // wake the HUD when a session changes (working -> done / needs-input)
+const LS_SOURCE = 'conductor.source'             // which backend multiplexer to drive: '' = backend default, else 'tmux'|'herdr'
 const PERSIST_KEY = 'conductor.config'           // single key in the phone app's persistent store
 const PERSONAL = !!import.meta.env.VITE_PERSONAL  // personal build only
 
@@ -32,11 +33,15 @@ export function getOpenaiKeyPath(): string { return localStorage.getItem(LS_OPEN
 export function getIdleSleepSec(): number { return Math.max(0, Math.floor(Number(localStorage.getItem(LS_IDLE_SEC) || '0')) || 0) }
 // Wake the blanked HUD when a session changes state (working -> done / needs-input). Default on.
 export function getWakeOnChange(): boolean { return localStorage.getItem(LS_WAKE_CHANGE) !== '0' }
+// Which backend hosts the sessions: '' = let the backend use its configured default (tmux);
+// otherwise 'tmux' | 'herdr'. Sent as ?source= on every backend call; the backend gates on
+// what it actually has (advertised via /api/health) and falls back to its default if absent.
+export function getSource(): string { return localStorage.getItem(LS_SOURCE) || '' }
 
 function persist() {
   const c = getConfig()
   waitForEvenAppBridge()
-    .then((b) => b.setLocalStorage(PERSIST_KEY, JSON.stringify({ base: c.base, token: c.token, projectsDir: getProjectsDir(), openaiKeyPath: getOpenaiKeyPath(), idleSleepSec: getIdleSleepSec(), wakeOnChange: getWakeOnChange() })))
+    .then((b) => b.setLocalStorage(PERSIST_KEY, JSON.stringify({ base: c.base, token: c.token, projectsDir: getProjectsDir(), openaiKeyPath: getOpenaiKeyPath(), idleSleepSec: getIdleSleepSec(), wakeOnChange: getWakeOnChange(), source: getSource() })))
     .catch(() => {})
 }
 
@@ -49,6 +54,7 @@ export function setProjectsDir(p: string) { localStorage.setItem(LS_PROJECTS, p.
 export function setOpenaiKeyPath(p: string) { localStorage.setItem(LS_OPENAI_PATH, p.trim()); persist() }
 export function setIdleSleepSec(n: number) { localStorage.setItem(LS_IDLE_SEC, String(Math.max(0, Math.floor(n) || 0))); persist() }
 export function setWakeOnChange(on: boolean) { localStorage.setItem(LS_WAKE_CHANGE, on ? '1' : '0'); persist() }
+export function setSource(s: string) { localStorage.setItem(LS_SOURCE, (s || '').trim()); persist() }
 
 export function isConfigured(): boolean { const c = getConfig(); return !!c.base && !!c.token }
 
@@ -71,6 +77,7 @@ export async function loadPersistedConfig(): Promise<void> {
         if (c.openaiKeyPath) localStorage.setItem(LS_OPENAI_PATH, c.openaiKeyPath)
         if (c.idleSleepSec != null) localStorage.setItem(LS_IDLE_SEC, String(c.idleSleepSec))
         if (c.wakeOnChange != null) localStorage.setItem(LS_WAKE_CHANGE, c.wakeOnChange ? '1' : '0')
+        if (c.source) localStorage.setItem(LS_SOURCE, c.source)
       }
     }
   } catch { /* no bridge / nothing stored -> Setup screen */ }

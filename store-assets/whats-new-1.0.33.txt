@@ -1,0 +1,70 @@
+TMUXor — Changes since v1.0.7 (this update: v1.0.33)
+
+This update is a large stability, usability, and rendering pass focused on
+answering Claude Code's interactive prompts reliably from the glasses. Summary
+of all changes and improvements, grouped by area:
+
+── NEW: Full multi-question prompt support ──────────────────────────────
+• Claude Code can ask several questions at once (a tab strip ending in
+  "Submit"). The glasses now handle the whole flow end-to-end: read each
+  question, answer it, advance to the next, and submit — instead of only
+  handling the first question.
+• Single-select questions auto-advance when answered; multi-select questions
+  use a clear checkbox list and a single "next question" control; you submit
+  by selecting the real "Submit answers" option.
+• Free-text answers ("Type something") open the phone keyboard (or voice) and
+  type directly into that question's field, then return you to the prompt.
+• Each question opens in a readable full-screen view (question + options),
+  wrapped to the glasses width, so you can read it before answering.
+
+── Interactive prompt handling (correctness) ────────────────────────────
+• Multi-select now toggles the exact option you chose. Keystrokes are sent
+  one at a time so each cursor move registers before the toggle, eliminating
+  wrong/adjacent-item toggles and off-by-one drift.
+• Permission prompts (Bash / file-edit "Do you want to proceed?") are now
+  detected and shown as a clear Yes/No choice with the full command readable
+  first — previously only question-style prompts were recognized.
+• A single choice is confirmed by its option number (cursor-independent), so a
+  momentary misread can never approve the wrong option.
+• Plan-mode step lists and boxed prompts are no longer mistaken for choices.
+• If the conversation merely *discusses* menus/checkboxes, the app no longer
+  mistakes that text for a live prompt and lock the view.
+• Options whose labels start with a number (e.g. "30 minutes") are no longer
+  dropped.
+
+── Conversation & text rendering ────────────────────────────────────────
+• Code blocks are preserved verbatim with a left rail — they were previously
+  corrupted (e.g. "**kwargs"→"kwargs", "__init__"→"init"). Headings and
+  blockquotes now have distinct markers.
+• Long option labels and long questions now wrap cleanly with a hanging
+  indent in both the answer and read views (no cut-off, no orphaned
+  continuation lines).
+• Conversation and prompt text now wrap to the correct glasses width, fixing
+  early/uneven line breaks caused by re-using the terminal's narrower wrap.
+• Only glyphs that actually render on the device font are used for status
+  markers (fixed blank checkmarks / checkboxes).
+
+── Navigation & display ─────────────────────────────────────────────────
+• The conversation view follows the latest prompt until you manually scroll;
+  the read view opens on the question rather than stale earlier text, so a
+  typed answer no longer appears to "jump" elsewhere.
+• One additional line of conversation is shown (scroll indicators moved into
+  the title row).
+• Double-tap no longer wastes a tap when you're already at the bottom.
+
+── Reliability & security (from an internal code-review pass) ───────────
+• Sessions whose folder name contains a dot (e.g. git worktrees, version-
+  dotted directories) now show their conversation correctly.
+• Sending to a plain shell pane no longer leaves a stuck "working" indicator.
+• The heads-up display no longer sleeps while a prompt is open, so it can't
+  swallow your answer tap.
+• If a keystroke to the session fails, the on-glasses state reverts to what's
+  actually on screen instead of sticking in an optimistic state.
+• Backend hardening: the health endpoint no longer reveals key presence to
+  unauthenticated callers; the audit log is kept private (0600); the
+  transcript listing no longer errors if a file rotates mid-request; internal
+  caches are bounded to prevent memory growth in the long-running service.
+
+No new permissions are requested (still network + microphone only), and the
+app still connects solely to the user's own self-hosted backend over their
+private network behind a token — nothing is sent to the developer.

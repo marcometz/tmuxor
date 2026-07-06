@@ -1,7 +1,7 @@
-import { useState, useSyncExternalStore, type CSSProperties } from 'react'
-import { getConfig, setConfig, getProjectsDir, setProjectsDir, getOpenaiKeyPath, setOpenaiKeyPath, getIdleSleepSec, setIdleSleepSec, getWakeOnChange, setWakeOnChange } from './config'
-import { listPanes } from './api'
-import { subscribe, getSnapshot } from './store'
+import { useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react'
+import { getConfig, setConfig, getProjectsDir, setProjectsDir, getOpenaiKeyPath, setOpenaiKeyPath, getIdleSleepSec, setIdleSleepSec, getWakeOnChange, setWakeOnChange, getSource, setSource } from './config'
+import { listPanes, health } from './api'
+import { subscribe, getSnapshot, resetForSourceChange } from './store'
 
 // Decode the `tmuxor:<base64>` blob that install.sh prints into a config.
 function decodeBlob(text: string): { base: string; token: string } | null {
@@ -26,8 +26,20 @@ export function Setup({ onSave }: { onSave: () => void }) {
   const [keyPath, setKeyPath] = useState(getOpenaiKeyPath())
   const [idleSec, setIdleSec] = useState(String(getIdleSleepSec()))
   const [wakeChange, setWakeChange] = useState(getWakeOnChange())
+  const [source, setSrc] = useState(getSource())
+  const [sources, setSources] = useState<string[]>([])   // what the backend can serve
+  const [defSource, setDefSource] = useState('')          // the backend's own default
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+
+  // Ask the backend which multiplexers it can serve, so we only show a picker when there's
+  // a real choice (both tmux AND herdr present). Gated on what's installed — the phone can't
+  // offer a backend the machine doesn't have.
+  const refreshSources = () => {
+    if (!getConfig().base || !getConfig().token) return
+    health().then((h) => { setSources(h.sources || []); setDefSource(h.source || '') }).catch(() => setSources([]))
+  }
+  useEffect(refreshSources, [])
 
   // Live connection status — the phone's only status indicator now that the bottom bar is gone.
   // <App/> polls the fleet in the background, so the store reflects whether the backend is
@@ -49,8 +61,10 @@ export function Setup({ onSave }: { onSave: () => void }) {
     setOpenaiKeyPath(keyPath)
     setIdleSleepSec(Number(idleSec) || 0)
     setWakeOnChange(wakeChange)
+    setSource(source)
     try {
       await listPanes()
+      refreshSources()   // now that the connection is proven, learn what backends it offers
       onSave()
     } catch (e) {
       const msg = String((e as Error)?.message || e)
@@ -73,6 +87,8 @@ export function Setup({ onSave }: { onSave: () => void }) {
   const btn: CSSProperties = { marginTop: 14, width: '100%', padding: '14px', fontSize: 16, fontWeight: 600, borderRadius: 10, border: 'none', background: '#16c46a', color: '#04130a', opacity: busy ? 0.6 : 1 }
   const divider: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, margin: '22px 0 0', color: '#5f7a6b', fontSize: 12 }
   const rule: CSSProperties = { flex: 1, height: 1, background: '#1f6e45' }
+  const chip: CSSProperties = { padding: '10px 14px', fontSize: 14, borderRadius: 10, border: '1px solid #1f6e45', background: '#0f1712', color: '#cfeede', cursor: 'pointer' }
+  const chipOn: CSSProperties = { background: '#16c46a', color: '#04130a', borderColor: '#16c46a', fontWeight: 700 }
 
   return (
     <div style={wrap}>
@@ -92,6 +108,21 @@ export function Setup({ onSave }: { onSave: () => void }) {
       <input id="cfg-url" type="url" inputMode="url" style={input} value={base} onChange={(e) => { setBase(e.target.value); setErr('') }} placeholder="your Tailscale HTTPS URL" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
       <label style={label} htmlFor="cfg-token">Access token (your CONDUCTOR_TOKEN)</label>
       <input id="cfg-token" type="password" style={input} value={token} onChange={(e) => { setToken(e.target.value); setErr('') }} placeholder="paste your token" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
+
+      {(sources.length > 1 || (sources.length === 1 && !!defSource && !sources.includes(defSource))) && (
+        <>
+          <label style={label}>Backend — which multiplexer hosts your sessions</label>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {['', ...sources].map((s) => (
+              <button key={s || 'auto'} type="button" onClick={() => { if (s !== source) { setSrc(s); setSource(s); resetForSourceChange() } }}
+                style={{ ...chip, ...(source === s ? chipOn : {}) }}>
+                {s === '' ? `Auto — ${sources.includes(defSource) ? defSource : sources[0] || 'default'}` : s}
+              </button>
+            ))}
+          </div>
+          <p style={{ color: '#6f8a7b', fontSize: 12, margin: '6px 0 0' }}>Pick which backend’s sessions the glasses drive.</p>
+        </>
+      )}
 
       <label style={label} htmlFor="cfg-projects">Projects folder (optional) — where new sessions are created</label>
       <input id="cfg-projects" style={input} value={projects} onChange={(e) => { setProjects(e.target.value); setErr('') }} placeholder="~/projects (default)" autoCapitalize="off" autoCorrect="off" spellCheck={false} />

@@ -6,6 +6,33 @@ project memory; this file is the short "what changed" for each build.
 > Builds: TMUXor ships as a single **public** `.ehpk` — it bakes no secrets, so every user
 > enters their own backend URL + token on the app's Setup screen.
 
+## 1.0.35 — 2026-07-06
+- **Finished sessions stay pinned on top.** When a working session completes (working → idle) it no
+  longer drops back into the idle pack — it pins in a "done" band at the top of the list, marked »,
+  until you open it (opening acknowledges it). The header count bar shows a `N» done` segment.
+- **Choose your backend: tmux or Herdr.** The backend now supports [Herdr](https://herdr.dev/) as an
+  alternative session host alongside tmux. If your machine runs both, the phone Setup screen shows a
+  backend picker (Auto / tmux / herdr); the choice is sent per-request and the backend gates it on
+  what's actually installed. Herdr sessions get their status (working / needs-input / idle) from
+  Herdr's native agent state instead of screen inference. Pure-tmux setups are completely unchanged —
+  no picker appears and requests are byte-identical to 1.0.33.
+- Under the hood: pane ids are now opaque tokens (tmux `29`, herdr `w3:p6`) and URL-encoded; switching
+  backend resets the open view + done-band memory so nothing straddles two backends; multi-line text
+  to a herdr session is sent with soft newlines so it lands as one prompt.
+- **Fixes from the pre-release review (multi-agent, adversarially verified):** a session whose
+  completion you just watched is no longer false-pinned in the done band (closing a pane counts as
+  having seen it); switching backend while a session view is open no longer strands the glasses on a
+  dead screen (it ejects back to the list); a herdr-only machine (no tmux) now works out of the box
+  instead of failing every request; long permission diffs under herdr are fully scrollable; new
+  sessions under herdr join the existing project workspace instead of duplicating it; an in-flight
+  fleet poll can no longer repopulate the list with the old backend's sessions after a switch.
+
+## 1.0.33 — 2026-07-01
+- **Resubmission build — no functional changes from 1.0.32.** The Even Hub review of 1.0.32 asked for
+  a detailed change log of everything in the update. Version bumped so the build can be re-uploaded
+  with that log attached; a consolidated summary of all changes since the last approved build (1.0.7)
+  is in `store-assets/whats-new-1.0.33.txt`.
+
 ## 1.0.32 — 2026-06-30
 - **Review pass (multi-agent code review, verified findings).** Backend: project-dir encoding now
   matches Claude Code's real mapping (replaces `.` as well as `/`) so sessions whose folder contains a

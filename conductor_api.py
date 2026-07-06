@@ -30,19 +30,16 @@ import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 
 import tmux_conductor as tc
+import sources  # pluggable backend: tmux (default) or herdr, selected per request
 
 # parallelize the per-pane `capture-pane` forks in /api/panes (one per idle Claude
 # pane) so their latency overlaps instead of summing on the 5s fleet poll.
 _POOL = ThreadPoolExecutor(max_workers=8)
 
 TOKEN = os.environ.get("CONDUCTOR_TOKEN", "")
-TMUX_SESSION = os.environ.get("CONDUCTOR_TMUX_SESSION", "0")
-# command typed into a freshly-spawned pane to start a session (override per-user,
-# e.g. a shell fn that pins a Claude profile). Default = plain `claude`.
-LAUNCH_CMD = os.environ.get("CONDUCTOR_LAUNCH_CMD", "claude")
 # New sessions create their folder UNDER this base only (so we never touch unrelated dirs).
 # Default ~/projects; the phone Setup can override it per-request.
 PROJECTS_BASE = os.path.abspath(os.path.expanduser(os.environ.get("CONDUCTOR_PROJECTS_DIR", "~/projects")))
@@ -56,38 +53,39 @@ def _projects_base(override=None):
 _WAIT_RE = re.compile(r"(?:to navigate|to select|esc to cancel|\(y/n\)|\[y/n\]|\by/n\b|press enter to continue)", re.I)
 
 
-def _pane_status(p):
-    st = tc.session_status(p)
+def _pane_status(src, p):
+    st = src.session_status(p)
+    if getattr(src, "native_status", False):
+        return st  # herdr reports blocked/idle/working directly — no on-screen regex needed
     if st == "idle" and p["is_claude"]:
         try:
-            if _WAIT_RE.search(tc.capture_pane(p["pane_id"], 16)):
+            if _WAIT_RE.search(src.capture_pane(p["pane_id"], 16)):
                 return "waiting"
         except Exception:
             pass
     return st
 
 
-def pane_view(p):
+def pane_view(src, p):
     return {
         "id": p["pane_id"],
-        "n": p["pane_id"].lstrip("%"),
+        "n": src.pane_n(p),                    # tmux '%29'->'29'; herdr 'w3:p6' (opaque URL token)
         "window": p["window_index"],
         "window_name": p["window_name"],
         "pane_index": p["pane_index"],
         "title": p["title"],
-        "label": tc.session_label(p),
-        "tag": tc.window_tag(p),
-        "status": _pane_status(p),
+        "label": src.session_label(p),
+        "tag": src.window_tag(p),
+        "status": _pane_status(src, p),
         "cwd": p["path"],
         "is_claude": p["is_claude"],
         "is_conductor": p["is_conductor"],
     }
 
 
-def find_pane(n):
-    pane_id = "%" + str(n)
-    for p in tc.list_panes():
-        if p["pane_id"] == pane_id:
+def find_pane(src, n):
+    for p in src.list_panes():
+        if src.pane_n(p) == n:
             return p
     return None
 
@@ -216,7 +214,7 @@ def whisper_transcribe(audio, key):
 
 # --- new session: resolve a spoken folder -> dir, spawn a pane in window 1 ---
 
-def resolve_folder(spoken, base=None):
+def resolve_folder(src, spoken, base=None):
     s = (spoken or "").strip().rstrip(".")
     if not s:
         return None
@@ -235,7 +233,7 @@ def resolve_folder(spoken, base=None):
                     bases.append(p)
         except OSError:
             pass
-    for p in tc.list_panes():
+    for p in src.list_panes():
         if os.path.isdir(p["path"]) and p["path"] not in seen:
             seen.add(p["path"])
             bases.append(p["path"])
@@ -255,62 +253,18 @@ def propose_folder(spoken, base):
     return os.path.join(base, name)
 
 
-def list_windows():
-    """All windows (project tags) in the conductor's tmux session."""
-    out = tc._run(["list-windows", "-t", TMUX_SESSION, "-F", "#{window_index}\t#{window_name}\t#{window_panes}"])
-    wins = []
-    for line in out.stdout.splitlines():
-        p = line.split("\t")
-        if len(p) >= 3 and p[0].isdigit() and p[2].isdigit():  # skip malformed rows
-            wins.append({"index": int(p[0]), "name": p[1], "panes": int(p[2])})
-    return wins
-
-
-def _session_exists():
-    return tc._run(["has-session", "-t", TMUX_SESSION]).returncode == 0
-
-
-def create_session(folder, tag=None, base=None):
-    """Open a Claude session in `folder` under a project `tag` (tmux window): if a
-    window named `tag` exists, add the session as a new pane there; otherwise open a
-    new window named `tag` (or the folder's basename). On a fresh machine with NO tmux
-    session yet, create the session itself with this as its first window. Returns
-    (pane_id, how)."""
-    if not os.path.isdir(folder):  # create it — but ONLY under the projects base, never elsewhere
-        af, b = os.path.abspath(folder), _projects_base(base)
-        if af == b or af.startswith(b + os.sep):
-            os.makedirs(folder, exist_ok=True)
-        else:
-            raise RuntimeError("refusing to create a folder outside the projects base")
-    have = _session_exists()
-    idx = None
-    if tag and have:
-        for w in list_windows():
-            if w["name"] == tag:
-                idx = w["index"]
-                break
-    out, how = None, ""
-    if idx is not None:
-        out = tc._run(["split-window", "-t", f"{TMUX_SESSION}:{idx}", "-c", folder, "-P", "-F", "#{pane_id}"])
-        how = f"pane in '{tag}'"
-    if out is None or out.returncode != 0:  # no existing tag, that window is full, or no server yet
-        name = (tag or os.path.basename(folder.rstrip("/")) or "claude")[:20]
-        if not have:
-            # fresh machine: no tmux session -> create it with this as the first window
-            out = tc._run(["new-session", "-d", "-s", TMUX_SESSION, "-n", name, "-c", folder, "-P", "-F", "#{pane_id}"])
-            how = f"new session '{name}'"
-        else:
-            # NOTE: target "0:" (trailing colon = the SESSION) so tmux appends at the next
-            # free index. Bare "0" is read as window-index 0 → "index 0 in use" / wrong slot.
-            out = tc._run(["new-window", "-t", f"{TMUX_SESSION}:", "-c", folder, "-n", name, "-P", "-F", "#{pane_id}"])
-            how = f"new window '{name}'"
-        if out.returncode != 0:
-            raise RuntimeError((out.stderr or out.stdout).strip() or "could not create pane or window")
-    pane = out.stdout.strip()
-    # start the session (CONDUCTOR_LAUNCH_CMD, default `claude`; the new pane's
-    # interactive shell resolves shell functions/aliases like a custom profile launcher).
-    tc._run(["send-keys", "-t", pane, LAUNCH_CMD, "Enter"])
-    return pane, how
+def _ensure_under_base(folder, base=None):
+    """Create the session folder if missing — but ONLY under the projects base, so we
+    never touch unrelated dirs. Source-independent (filesystem); runs before the
+    selected source spawns the session. The per-source spawn (tmux window / herdr
+    workspace) lives in sources.py."""
+    if os.path.isdir(folder):
+        return
+    af, b = os.path.abspath(folder), _projects_base(base)
+    if af == b or af.startswith(b + os.sep):
+        os.makedirs(folder, exist_ok=True)
+    else:
+        raise RuntimeError("refusing to create a folder outside the projects base")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -343,6 +297,14 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return None
 
+    def _source(self):
+        # per-request backend: ?source= (also works for SSE/EventSource, which can't
+        # set headers) or the X-Conductor-Source header. No selection -> the default
+        # (tmux), resolved WITHOUT any availability probe so the hot poll is unchanged.
+        q = parse_qs(urlparse(self.path).query)
+        requested = q.get("source", [None])[0] or self.headers.get("X-Conductor-Source")
+        return sources.get_source(sources.resolve_source_name(requested))
+
     def log_message(self, *a):
         pass
 
@@ -351,7 +313,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("access-control-allow-origin", "*")
         self.send_header("access-control-allow-methods", "GET, POST, OPTIONS")
-        self.send_header("access-control-allow-headers", "authorization, content-type")
+        self.send_header("access-control-allow-headers", "authorization, content-type, x-conductor-source")
         self.send_header("content-length", "0")
         self.end_headers()
 
@@ -382,31 +344,38 @@ class Handler(BaseHTTPRequestHandler):
             # carries the token, so it still gets the real value; an anon probe just sees reachability.
             voice = bool(openai_key(kp)) if authed else False
             resp = {"ok": True, "service": "conductor-api", "voice": voice}
+            if authed:
+                # which multiplexers this box can serve + the default, so the phone can
+                # show a source picker gated on what's actually installed. Authed-only:
+                # don't let an anon tailnet peer probe what's running here.
+                resp["sources"] = sources.available_sources()
+                resp["source"] = sources.DEFAULT_SOURCE
             if not voice and authed:
                 resp["checked"] = openai_key_checked(kp)  # tell the user WHERE we looked
             return self._json(200, resp)
         if not self._authed():
             return self._json(401, {"error": "unauthorized"})
+        src = self._source()
         if path == "/api/panes":
             claude_only = q.get("claude_only", ["0"])[0] in ("1", "true")
-            panes = tc.list_panes(claude_only=claude_only)
-            views = list(_POOL.map(pane_view, panes)) if panes else []  # captures run concurrently
+            panes = src.list_panes(claude_only=claude_only)
+            views = list(_POOL.map(lambda p: pane_view(src, p), panes)) if panes else []  # captures run concurrently
             return self._json(200, {"panes": views})
         if path == "/api/windows":
-            return self._json(200, {"windows": list_windows()})
-        m = re.fullmatch(r"/api/panes/(\d+)/screen", path)
+            return self._json(200, {"windows": src.list_windows()})
+        m = re.fullmatch(r"/api/panes/([^/]+)/screen", path)  # id: tmux '29' or herdr 'w3:p6'
         if m:
-            p = find_pane(m.group(1))
+            p = find_pane(src, unquote(m.group(1)))
             if not p:
                 return self._json(404, {"error": "no such pane"})
             lines = int(q.get("lines", ["200"])[0])
-            return self._json(200, {"id": p["pane_id"], "text": tc.capture_pane(p["pane_id"], lines)})
-        m = re.fullmatch(r"/api/panes/(\d+)/conversation", path)
+            return self._json(200, {"id": p["pane_id"], "text": src.capture_pane(p["pane_id"], lines)})
+        m = re.fullmatch(r"/api/panes/([^/]+)/conversation", path)
         if m:
-            p = find_pane(m.group(1))
+            p = find_pane(src, unquote(m.group(1)))
             if not p:
                 return self._json(404, {"error": "no such pane"})
-            sess = tc.resolve_session(p)
+            sess = src.resolve_session(p)
             if sess is not None:
                 # exact session identified: use ITS transcript. jsonl=None means a
                 # brand-new session with no turns yet -> show empty, NEVER fall back
@@ -415,9 +384,9 @@ class Handler(BaseHTTPRequestHandler):
                 working = sess.get("status") == "busy"
             else:
                 # couldn't identify the session -> best-effort newest transcript in cwd
-                cands = tc.transcript_candidates(p["path"], p["pid"])
+                cands = src.transcript_candidates(p)
                 jsonl = str(cands[0]) if cands else None
-                working = _pane_status(p) == "working"
+                working = _pane_status(src, p) == "working"
             # etag = transcript identity + working flag, passed back via ?etag=. When it
             # matches, return a tiny {notModified} 200 (skip read/parse/serialize) — a
             # plain 200 (not HTTP 304) so the WebView's fetch never sees a bare 304.
@@ -432,9 +401,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"id": p["pane_id"], "notModified": True, "etag": etag})
             turns = tc.read_conversation(jsonl) if jsonl else []
             return self._json(200, {"id": p["pane_id"], "turns": turns, "working": working, "etag": etag})
-        m = re.fullmatch(r"/api/events/(\d+)", path)
+        m = re.fullmatch(r"/api/events/([^/]+)", path)
         if m:
-            return self._sse_screen(m.group(1), int(q.get("lines", ["40"])[0]))
+            return self._sse_screen(src, unquote(m.group(1)), int(q.get("lines", ["40"])[0]))
         self._json(404, {"error": "not_found", "path": path})
 
     # --- POST ---
@@ -450,6 +419,7 @@ class Handler(BaseHTTPRequestHandler):
         path, q = u.path, parse_qs(u.query)
         if not self._authed():
             return self._json(401, {"error": "unauthorized"})
+        src = self._source()
         if path == "/api/transcribe":  # raw WAV body -> Whisper (read before JSON parse)
             n = int(self.headers.get("content-length", 0))
             audio = self.rfile.read(n)
@@ -465,29 +435,29 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body()
         if body is None:
             return self._json(400, {"error": "invalid JSON"})
-        m = re.fullmatch(r"/api/panes/(\d+)/send", path)
+        m = re.fullmatch(r"/api/panes/([^/]+)/send", path)
         if m:
-            p = find_pane(m.group(1))
+            p = find_pane(src, unquote(m.group(1)))
             if not p:
                 return self._json(404, {"error": "no such pane"})
             text = body.get("text", "")
             if not text:
                 return self._json(400, {"error": "text required"})
             try:  # pane may be unsendable (the conductor's own pane) or closed mid-request
-                r = tc.send_text(p["pane_id"], text, submit=bool(body.get("submit", True)))
+                r = src.send_text(p["pane_id"], text, submit=bool(body.get("submit", True)))
             except Exception as e:
                 return self._json(502, {"error": str(e)})
             return self._json(200, {"ok": True, **r})
-        m = re.fullmatch(r"/api/panes/(\d+)/keys", path)
+        m = re.fullmatch(r"/api/panes/([^/]+)/keys", path)
         if m:
-            p = find_pane(m.group(1))
+            p = find_pane(src, unquote(m.group(1)))
             if not p:
                 return self._json(404, {"error": "no such pane"})
             keys = body.get("keys")
             if not keys:
                 return self._json(400, {"error": "keys required"})
             try:
-                return self._json(200, {"ok": True, **tc.send_keys(p["pane_id"], keys)})
+                return self._json(200, {"ok": True, **src.send_keys(p["pane_id"], keys)})
             except Exception as e:
                 return self._json(502, {"error": str(e)})
         if path == "/api/translate":
@@ -500,26 +470,27 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(502, {"error": str(e)})
         if path == "/api/resolve-folder":
             q = body.get("text", ""); base = _projects_base(body.get("base"))
-            f = resolve_folder(q, base)
+            f = resolve_folder(src, q, base)
             return self._json(200, {"found": bool(f), "path": f or "", "create_path": propose_folder(q, base), "query": q})
         if path == "/api/new-session":
             base = body.get("base")
-            f = body.get("path") or resolve_folder(body.get("text", ""), base) or propose_folder(body.get("text", ""), _projects_base(base))
+            f = body.get("path") or resolve_folder(src, body.get("text", ""), base) or propose_folder(body.get("text", ""), _projects_base(base))
             if not f:
                 return self._json(400, {"error": "folder not found", "query": body.get("text", "")})
             try:
-                # sanitize the spoken tag -> a safe tmux window name (no tabs/newlines/
+                # sanitize the spoken tag -> a safe window/workspace name (no tabs/newlines/
                 # control chars that would corrupt the tab-delimited list-panes parse)
                 tag = re.sub(r"[^\w.-]", "", (body.get("tag") or "").strip()) or None
-                pane, how = create_session(f, tag, base)  # create_session confines new dirs to the base
-                return self._json(200, {"ok": True, "pane": pane, "n": pane.lstrip("%"), "cwd": f, "how": how})
+                _ensure_under_base(f, base)          # confine new dirs to the projects base (source-independent)
+                pane, how = src.create_session(f, tag)
+                return self._json(200, {"ok": True, "pane": pane, "n": src.pane_n({"pane_id": pane}), "cwd": f, "how": how})
             except Exception as e:
                 return self._json(502, {"error": str(e)})
         self._json(404, {"error": "not_found", "path": path})
 
     # --- SSE: stream a pane's screen whenever it changes ---
-    def _sse_screen(self, n, lines):
-        p = find_pane(n)
+    def _sse_screen(self, src, n, lines):
+        p = find_pane(src, n)
         if not p:
             return self._json(404, {"error": "no such pane"})
         self.send_response(200)
@@ -530,7 +501,7 @@ class Handler(BaseHTTPRequestHandler):
         last = None
         try:
             for i in range(36000):  # ~10h cap at 1s
-                screen = tc.capture_pane(p["pane_id"], lines)
+                screen = src.capture_pane(p["pane_id"], lines)
                 if screen != last:
                     last = screen
                     payload = json.dumps({"id": p["pane_id"], "text": screen})

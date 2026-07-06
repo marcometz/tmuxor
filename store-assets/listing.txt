@@ -9,26 +9,29 @@ TMUXor
 
 SUBTITLE / TAGLINE
 ------------------
-Your tmux Claude Code fleet, hands-free on your glasses
+Your tmux or Herdr Claude Code fleet, hands-free on your glasses
 
 
 SHORT DESCRIPTION
 -----------------
-TMUXor brings the Claude Code (and shell) sessions running in your tmux panes
+TMUXor brings the Claude Code (and shell) sessions running in tmux or Herdr
 onto your Even G2 glasses. See which session needs you, read its latest reply,
 and respond by voice — hands-free, over your own private Tailscale network.
 
 
 DESCRIPTION
 -----------
-TMUXor — your tmux Claude Code fleet, hands-free on your glasses.
+TMUXor — your tmux or Herdr Claude Code fleet, hands-free on your glasses.
 
 TMUXor is a heads-up conductor for developers who run many Claude Code sessions
-at once. It brings the sessions running in your tmux panes onto your Even G2
-glasses so you can stay in flow without reaching for the laptop.
+at once. It brings the sessions running in your terminal — in tmux or in Herdr
+(herdr.dev) — onto your Even G2 glasses so you can stay in flow without reaching
+for the laptop.
 
-• Organized fleet — tmux windows become project tags; each pane is one session,
-  listed by tag so you can find things fast.
+• Organized fleet — tmux windows (or Herdr workspaces) become project tags; each
+  pane is one session, listed by tag so you can find things fast.
+• Done, front and center — when a working session finishes it pins to the top of
+  the list, marked done, until you open it, so nothing gets lost in the pile.
 • Real conversations — read the actual prompts and replies (not raw terminal
   noise). Reopen a session right where you left off — or jump straight to a new
   question if one arrived while you were away.
@@ -36,11 +39,14 @@ glasses so you can stay in flow without reaching for the laptop.
   Approve interactive menu choices with a tap.
 • Start new sessions — pick a project tag, speak a folder, and TMUXor opens a
   Claude session there.
+• Your choice of backend — use tmux or Herdr. If your machine runs both, pick
+  which one hosts your sessions right on the Setup screen; Herdr sessions report
+  their working / needs-input status natively.
 • Private by design — talks only to your own backend on your own machine, over
   Tailscale, behind a token you set. Nothing is sent to the app developer.
 
-Requires a one-time backend setup on your computer (tmux + Claude Code +
-Tailscale). Full setup guide: github.com/liyiyuian/tmuxor — run install.sh,
+Requires a one-time backend setup on your computer (tmux or Herdr + Claude Code
++ Tailscale). Full setup guide: github.com/liyiyuian/tmuxor — run install.sh,
 then paste the printed config code into the app.
 
 
@@ -52,8 +58,8 @@ Productivity / Developer Tools
 PERMISSIONS (justifications)
 ----------------------------
 network — Connects to your own TMUXor backend over Tailscale to read and drive
-your tmux sessions. (Whitelisted to Tailscale hosts; the app talks only to the
-backend URL you enter in Setup.)
+your tmux or Herdr sessions. (Whitelisted to Tailscale hosts; the app talks only
+to the backend URL you enter in Setup.)
 
 g2-microphone — Captures glasses microphone audio for voice replies, transcribed
 by your configured backend.

@@ -1,8 +1,9 @@
 # TMUXor — Setup Guide
 
 TMUXor turns your **Even G2 glasses** into a hands-free conductor for the **Claude Code
-(and shell) sessions running in your tmux panes**: see which session needs you, read the
-conversation, and reply by voice — all from the glasses, over your Tailscale network.
+(and shell) sessions running in tmux or [Herdr](https://herdr.dev/)**: see which session
+needs you, read the conversation, and reply by voice — all from the glasses, over your
+Tailscale network.
 
 It has two halves:
 
@@ -19,9 +20,11 @@ It has two halves:
 ## 1. Prerequisites
 
 On the **computer** that runs your sessions:
-- `tmux` with your Claude Code / shell sessions in one tmux **session** (default name `0`).
+- `tmux` with your Claude Code / shell sessions in one tmux **session** (default name `0`)
+  — **or** [Herdr](https://herdr.dev/) (an agent-aware multiplexer) hosting them instead.
+  See §2d to enable/select Herdr; if you only use tmux, ignore it.
 - [Claude Code](https://claude.com/claude-code) installed (the app reads its session files).
-- **Python 3.10+** (no pip packages needed — the backend uses only the standard library + the `tmux` CLI).
+- **Python 3.10+** (no pip packages needed — the backend uses only the standard library + the `tmux` or `herdr` CLI).
 - **Tailscale** installed and logged in.
 - *(Optional)* an **OpenAI API key** — enables voice→text via Whisper. Without it, voice is
   off and you type your replies on the phone instead; everything else still works.
@@ -59,6 +62,8 @@ CONDUCTOR_BIND=127.0.0.1          # keep loopback; expose via Tailscale (below)
 # CONDUCTOR_TMUX_SESSION=0        # which tmux session holds your panes
 # CONDUCTOR_LAUNCH_CMD=claude     # command run in a new pane when you create a session
 # CONDUCTOR_API_PORT=8790
+# CONDUCTOR_SOURCE=tmux           # default backend: tmux (default) or herdr — see §2d
+# CONDUCTOR_HERDR_BIN=            # full path to the herdr binary, if not on the service PATH
 EOF
 chmod 600 ~/.config/tmux-conductor.env
 ```
@@ -117,6 +122,23 @@ tailscale serve status      # shows your https URL, e.g. https://<host>.<tailnet
 Copy that **HTTPS URL** — you'll enter it in the glasses app. (If `serve` needs sudo every
 time, run `sudo tailscale set --operator=$USER` once.)
 
+### 2d. (Optional) Use Herdr instead of / alongside tmux
+
+TMUXor can drive sessions hosted by **[Herdr](https://herdr.dev/)** (an agent-aware
+terminal multiplexer) instead of tmux. Herdr reports each session's state
+(working / needs-input / idle / done) **natively**, so status is more accurate than the
+tmux path's screen inference.
+
+- **Nothing to configure to detect it:** if the `herdr` server is running, `/api/health`
+  advertises it and the phone **Setup** screen shows a backend picker (**Auto · tmux ·
+  herdr**). Pick one; the choice is sent per request and gated on what's actually installed.
+- **If `herdr` isn't found:** the `systemd --user` service `PATH` often omits `~/.local/bin`
+  (where Herdr installs), so set its full path in the env file:
+  `CONDUCTOR_HERDR_BIN=/home/you/.local/bin/herdr`, then `systemctl --user restart tmux-conductor`.
+- **To default the backend to Herdr** (no picker needed), set `CONDUCTOR_SOURCE=herdr`.
+- Your Claude sessions must actually run **inside** Herdr for it to see them (Herdr replaces
+  tmux; it doesn't manage an existing tmux server).
+
 ---
 
 ## 3. Glasses app setup
@@ -168,8 +190,9 @@ background — it's the Bluetooth bridge to the glasses.
 
 Three gestures, reassigned per screen (tap = primary, double-tap = back, swipe = move/scroll):
 
-- **Panels list** — your sessions, grouped by tmux window (the **tag**). Swipe to move,
-  double-tap to jump a page, tap to open. Row 0 is **＋ new session**.
+- **Panels list** — your sessions, grouped by tmux window / Herdr workspace (the **tag**),
+  with finished sessions (**»**) pinned on top. Swipe to move, double-tap to jump a page,
+  tap to open. Row 0 is **＋ new session**.
 - **Conversation** — opens at the latest question; swipe to scroll, **tap = talk** (speak a
   reply → review screen → tap to send), double-tap = back.
 - **New session** — pick a **tag** (existing tmux window or ＋ speak a new one) → speak a

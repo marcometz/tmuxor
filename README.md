@@ -1,12 +1,13 @@
 # TMUXor
 
-**Your tmux Claude Code fleet, hands-free on your Even G2 glasses.**
+**Your tmux (or Herdr) Claude Code fleet, hands-free on your Even G2 glasses.**
 
-TMUXor puts the Claude Code (and shell) sessions running in your tmux panes onto your
-glasses, so your running work stays trackable and hands-free. Each tmux window is a
-project **tag**, so you tell sessions apart at a glance — see which one needs you, read
-its real prompts and replies, and **continue** it by voice — over your own private
-Tailscale network. Nothing is sent to anyone but your own machine.
+TMUXor puts the Claude Code (and shell) sessions running in your terminal — in **tmux**
+or in **[Herdr](https://herdr.dev/)** — onto your glasses, so your running work stays
+trackable and hands-free. Each tmux window (or Herdr workspace) is a project **tag**, so
+you tell sessions apart at a glance — see which one needs you, read its real prompts and
+replies, and **continue** it by voice — over your own private Tailscale network. Nothing
+is sent to anyone but your own machine.
 
 This repo is the **backend** (a small stdlib-Python control plane that runs on your
 computer) plus the **glasses app source**. The glasses app itself installs from the
@@ -50,6 +51,11 @@ That's it — no typing the URL or token by hand. (Manual entry also available �
 - **Even G2 glasses** + the Even phone app, paired.
 - **tmux** and **Claude Code** installed. You do *not* need a session running already —
   TMUXor can start your first one from the glasses ("＋ new session").
+- *(Alternative to tmux)* **[Herdr](https://herdr.dev/)** — an agent-aware terminal
+  multiplexer. If Herdr is installed and running, TMUXor auto-detects it; the phone Setup
+  screen then lets you pick tmux or Herdr (Herdr reports session status natively). If the
+  `herdr` binary isn't on the service's `PATH`, set `CONDUCTOR_HERDR_BIN` in
+  `~/.config/tmux-conductor.env` to its full path.
 - **Tailscale**, signed in on the computer **and** the phone (same tailnet), **with HTTPS
   Certificates enabled** for your tailnet (Tailscale admin console → Settings → enable
   HTTPS) — `tailscale serve` needs it for the secure URL the glasses connect to.
@@ -71,7 +77,8 @@ gestures**, reassigned per screen (each screen shows a hint of what they do):
 > **tap** = the primary action · **double-tap** = back · **swipe up/down** = move / scroll
 
 - **The fleet** — your sessions, sorted by what needs you: **!** waiting on you · **●** working
-  · **○** idle. Each row is `tag  title` (the tag is the tmux window / project). Swipe to scroll
+  · **○** idle, with **finished** sessions (`»`) pinned on top until you open them. Each row is
+  `tag  title` (the tag is the tmux window / Herdr workspace / project). Swipe to scroll
   (**▶** marks the selected row), tap to open. The top row, **＋ new session**, starts a new one.
 - **Reading a session** — opens at the latest question. Swipe to scroll the real prompts and
   replies. **Double-tap** walks you back toward the live edge — latest prompt → bottom → out to
