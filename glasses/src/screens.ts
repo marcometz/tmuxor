@@ -7,6 +7,7 @@ import { truncateGlassText, getTextWidth } from 'even-toolkit/pretext'
 import { createGlassScreenRouter, type GlassScreen } from 'even-toolkit/glass-screen-router'
 import type { AppState } from './store'
 import type { Pane } from './api'
+import { isConfigured } from './config'
 
 export interface Ctx {
   exitApp: () => void
@@ -96,6 +97,7 @@ function menuRows(s: AppState): MenuRow[] {
 
 const listScreen: GlassScreen<AppState, Ctx> = {
   display(s, nav): DisplayData {
+    if (!isConfigured()) return { lines: [...glassHeader('TMUXor'), line('Not set up yet', 'meta'), line('Open TMUXor on your phone', 'meta'), line('and enter your backend URL + token', 'meta')] }
     if (s.loading) return { lines: [...glassHeader('TMUXor'), line('loading…', 'meta')] }
     if (s.error) return { lines: [...glassHeader('TMUXor'), line('offline', 'meta'), line(clip(s.error, 26), 'meta')] }
     const wait = s.panes.filter((p) => p.status === 'waiting').length

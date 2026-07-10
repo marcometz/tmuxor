@@ -1,0 +1,54 @@
+TMUXor — Changes since v1.0.33 (this update: v1.0.36)
+
+This update adds an alternative session backend (Herdr) selectable per user, a
+"finished sessions" band at the top of the list, and a set of reliability fixes.
+Pure-tmux setups behave exactly as before. Summary of all changes and
+improvements, grouped by area:
+
+── NEW: Choose your backend — tmux or Herdr ─────────────────────────────
+• TMUXor can now drive Claude Code sessions hosted by EITHER tmux (as before)
+  OR Herdr (herdr.dev), an agent-aware terminal multiplexer.
+• If your machine runs both, the phone Setup screen shows a backend picker
+  (Auto / tmux / herdr). The choice is sent per request and is gated on what's
+  actually installed — the app never offers a backend the machine doesn't have.
+• Herdr sessions report their state (working / needs-input / idle / done)
+  NATIVELY, instead of being inferred from the terminal — so status is more
+  accurate.
+• Herdr sessions now show their REAL session name (the session's /rename title
+  or auto-name), resolved from the Claude session record — previously they
+  showed the project folder name, so every session in one folder looked alike.
+• A pure-tmux setup sees no picker and every request is byte-for-byte identical
+  to the previous version.
+
+── NEW: Finished sessions pinned on top ─────────────────────────────────
+• When a working session completes (working → idle) it no longer drops back into
+  the idle pack — it pins to the top of the list in a "done" band, marked », so
+  a finished job is easy to spot. Opening it clears the mark.
+• The header count bar shows a "N» done" segment.
+• Closing a session you were watching counts as having seen it, so a completion
+  you watched live is not re-flagged as unread.
+
+── Reliability & correctness ────────────────────────────────────────────
+• Switching backend in Setup while a session view is open now returns the
+  glasses cleanly to the session list instead of leaving a stale view.
+• A fleet refresh already in flight when you switch backend is discarded, so the
+  list can't briefly repopulate with the other backend's sessions.
+• A machine running only Herdr (no tmux) now works out of the box instead of
+  every request failing against a missing tmux.
+• Long approval prompts (big command/diff) under Herdr are fully scrollable —
+  the top is no longer cut off.
+• Creating a new session under an existing project tag joins that Herdr
+  workspace instead of creating a duplicate.
+• Multi-line text sent to a Herdr session is delivered as ONE prompt (soft
+  newlines) instead of being split into several submissions.
+• Session and pane identifiers are handled as opaque tokens throughout, so
+  Herdr-style ids work everywhere tmux ids did.
+
+── Diagnostics ──────────────────────────────────────────────────────────
+• Uncaught application errors are now captured and shown on the Setup screen
+  (and reported to your own backend) instead of the app closing silently — so
+  any problem can be identified and fixed quickly.
+
+No new permissions are requested (still network + microphone only). The app
+still connects solely to your own self-hosted backend over your private network
+behind a token you set — nothing is sent to the developer.

@@ -4,7 +4,7 @@
 import { listPanes, paneScreen, paneConversation, streamPane, sendToPane, sendKeys, translate, transcribe, resolveFolder, newSession, listWindows, health, type Pane, type Turn } from './api'
 import { GlassBridgeSource } from 'even-toolkit/stt'
 import { getTextWidth } from 'even-toolkit/pretext'
-import { getIdleSleepSec, getWakeOnChange } from './config'
+import { getIdleSleepSec, getWakeOnChange, isConfigured } from './config'
 
 export type Phase = 'view' | 'listening' | 'confirm'
 const SLOTS = 9
@@ -110,6 +110,10 @@ function repaintPanes() {
 }
 let fleetGen = 0 // bumped on a backend switch so an in-flight poll from the OLD source is discarded
 export async function refresh() {
+  // Do NOT hit the network before the user has entered a backend URL + token: with an empty base
+  // the fetch would go to a RELATIVE /api/panes (the app's own origin) and 404 — which the Even Hub
+  // review harness flags as a 4xx. Stay idle until configured (the phone shows Setup meanwhile).
+  if (!isConfigured()) { if (state.loading || state.error) set({ loading: false, error: null }); return }
   const gen = fleetGen
   try {
     const raw = await listPanes(true)

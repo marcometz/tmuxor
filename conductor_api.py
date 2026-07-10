@@ -460,6 +460,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"ok": True, **src.send_keys(p["pane_id"], keys)})
             except Exception as e:
                 return self._json(502, {"error": str(e)})
+        if path == "/api/clientlog":
+            # the glasses app POSTs uncaught JS errors here so they land in the service journal
+            # (journalctl --user -u tmux-conductor) — turns a mysterious app "quit" into a readable
+            # error+stack. Just logs a bounded string; no execution, no injection surface.
+            print("[clientlog] " + str(body.get("msg", ""))[:4000], flush=True)
+            return self._json(200, {"ok": True})
         if path == "/api/translate":
             desc = body.get("description", "")
             if not desc:

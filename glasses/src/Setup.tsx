@@ -31,6 +31,7 @@ export function Setup({ onSave }: { onSave: () => void }) {
   const [defSource, setDefSource] = useState('')          // the backend's own default
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [lastErr, setLastErr] = useState(() => { try { return localStorage.getItem('conductor.lastError') || '' } catch { return '' } })
 
   // Ask the backend which multiplexers it can serve, so we only show a picker when there's
   // a real choice (both tmux AND herdr present). Gated on what's installed — the phone can't
@@ -97,6 +98,15 @@ export function Setup({ onSave }: { onSave: () => void }) {
         Run <code>install.sh</code> on your computer, then paste the config code it prints. Everything stays on this phone.
       </p>
       <p style={{ color: statusColor, fontSize: 13, margin: '4px 0 0', fontWeight: 600 }}>{status}</p>
+
+      {lastErr && (
+        <div style={{ background: '#241010', border: '1px solid #6e2a2a', borderRadius: 8, padding: '8px 10px', margin: '10px 0 0' }}>
+          <div style={{ fontWeight: 600, fontSize: 12, color: '#ff9b9b' }}>⚠ Last app error — please copy this to your developer</div>
+          <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '6px 0 0', fontFamily: 'monospace', fontSize: 10, color: '#ffc9c9', maxHeight: 140, overflow: 'auto' }}>{lastErr}</pre>
+          <button type="button" style={{ marginTop: 6, padding: '6px 10px', fontSize: 12, borderRadius: 8, border: '1px solid #6e2a2a', background: 'transparent', color: '#ff9b9b' }}
+            onClick={() => { try { localStorage.removeItem('conductor.lastError') } catch { /* */ } setLastErr('') }}>Dismiss</button>
+        </div>
+      )}
 
       <label style={label} htmlFor="cfg-blob">Paste config — the code from install.sh</label>
       <textarea id="cfg-blob" style={{ ...input, minHeight: 64, resize: 'vertical', fontFamily: 'monospace', fontSize: 13 }}

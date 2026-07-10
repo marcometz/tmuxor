@@ -151,6 +151,43 @@ _HERDR_STATUS = {"working": "working", "idle": "idle", "blocked": "waiting",
                  "done": "idle", "unknown": "idle"}
 
 
+# herdr panes carry no Claude task title (unlike a tmux pane_title), so the fleet fell back to
+# the cwd folder name (e.g. every session in one project showed the folder name). The real
+# session name lives in Claude's runtime record sessions/<pid>.json {sessionId, name, pid}.
+# A pane resolves to it two ways: (1) cheaply via agent_session.value (its sessionId), or
+# (2) via `pane process-info` -> the claude foreground pid -> the pid keyed record. Both maps
+# are built from those small files, cached; the per-pane pid lookup is itself cached.
+_sname_cache = {"t": 0.0, "sid": {}, "pid": {}}
+_SNAME_TTL = 20.0
+_hlabel_cache = {}   # herdr pane_id -> (name, ts): caches the process-info resolution
+_HLABEL_TTL = 120.0
+
+
+def _session_names():
+    now = time.time()
+    if (_sname_cache["sid"] or _sname_cache["pid"]) and now - _sname_cache["t"] < _SNAME_TTL:
+        return _sname_cache
+    sid, pid = {}, {}
+    for d in tc.SESSION_DIRS:
+        try:
+            for f in d.glob("*.json"):
+                try:
+                    r = json.loads(f.read_text())
+                except Exception:
+                    continue
+                name = r.get("name")
+                if not name:
+                    continue
+                if r.get("sessionId"):
+                    sid[r["sessionId"]] = name
+                if r.get("pid") is not None:
+                    pid[str(r["pid"])] = name
+        except OSError:
+            pass
+    _sname_cache.update(sid=sid, pid=pid, t=now)
+    return _sname_cache
+
+
 def _resolve_herdr_bin():
     """Locate the herdr binary. The systemd --user service PATH usually omits
     ~/.local/bin (where herdr installs), so PATH lookup alone finds nothing in the
@@ -254,6 +291,7 @@ class HerdrSource:
                 "is_conductor": False,                        # the API runs as a service, not inside a pane
                 "is_claude": is_claude,
                 "_agent_status": rp.get("agent_status", "unknown"),
+                "_sid": (rp.get("agent_session") or {}).get("value"),  # Claude sessionId -> real name
             })
         # stable pane_index within each window (workspace) for a deterministic sort tiebreak
         counter = defaultdict(int)
@@ -306,9 +344,38 @@ class HerdrSource:
         return _HERDR_STATUS.get(p.get("_agent_status", "unknown"), "idle")
 
     def session_label(self, p):
-        # herdr exposes no Claude task title here — use the project folder name.
+        # Prefer the real Claude session name (its /rename or auto title); fall back to the
+        # project folder name when the pane has no resolvable session.
+        if p.get("is_claude"):
+            nm = self._claude_name(p)
+            if nm:
+                return nm
         base = os.path.basename((p.get("path") or "").rstrip("/"))
         return base or p.get("command") or "session"
+
+    def _claude_name(self, p):
+        names = _session_names()
+        sid = p.get("_sid")
+        if sid and sid in names["sid"]:
+            return names["sid"][sid]                     # cheap: herdr gave us the sessionId
+        pane_id = p["pane_id"]
+        now = time.time()
+        hit = _hlabel_cache.get(pane_id)
+        if hit and now - hit[1] < _HLABEL_TTL:
+            return hit[0]
+        try:  # resolve via the pane's claude foreground pid -> the pid-keyed session name
+            info = self._json(["pane", "process-info", "--pane", pane_id]).get("process_info", {})
+            for c in info.get("foreground_processes", []):
+                if c.get("name") == "claude":
+                    nm = names["pid"].get(str(c.get("pid")))
+                    if nm:
+                        if len(_hlabel_cache) > 256:
+                            _hlabel_cache.pop(next(iter(_hlabel_cache)))
+                        _hlabel_cache[pane_id] = (nm, now)
+                        return nm
+        except Exception:
+            pass
+        return None
 
     def window_tag(self, p):
         return tc.window_tag(p)  # generic: reads window_name / window_index

@@ -3,8 +3,22 @@ import { createRoot } from 'react-dom/client'
 import { MemoryRouter } from 'react-router'
 import { App } from './AppGlasses'
 import { Setup } from './Setup'
-import { loadPersistedConfig } from './config'
+import { loadPersistedConfig, getConfig } from './config'
 import { subscribe, getSnapshot, submitTypedInput, setTypingText, cancelInput, cancelNewSession, refresh } from './store'
+
+// Capture uncaught errors so a crash is DIAGNOSABLE instead of a silent "quit": stash the last
+// one in localStorage (shown in Setup) and best-effort POST it to the backend journal.
+function reportClientError(kind: string, err: unknown) {
+  const e = err as { message?: string; stack?: string } | undefined
+  const msg = `${kind}: ${(e && (e.message || String(err))) || String(err)}\n${(e && e.stack) || ''}`.slice(0, 4000)
+  try { localStorage.setItem('conductor.lastError', msg) } catch { /* quota */ }
+  try {
+    const { base, token } = getConfig()
+    if (base && token) fetch(`${base}/api/clientlog`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ msg }) }).catch(() => {})
+  } catch { /* offline */ }
+}
+window.addEventListener('error', (e) => reportClientError('error', e.error ?? e.message))
+window.addEventListener('unhandledrejection', (e) => reportClientError('promise', (e as PromiseRejectionEvent).reason))
 
 // Phone-side TEXT input — the alternative to voice at any "listening" point (reply, new-tag
 // name, new-session folder). Shows whenever the app is waiting for input, so the app is fully

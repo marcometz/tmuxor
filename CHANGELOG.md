@@ -6,6 +6,20 @@ project memory; this file is the short "what changed" for each build.
 > Builds: TMUXor ships as a single **public** `.ehpk` — it bakes no secrets, so every user
 > enters their own backend URL + token on the app's Setup screen.
 
+## 1.0.37 — 2026-07-09
+- **Review fix:** the app no longer makes any network request before you've entered your backend
+  URL + token. Previously the fleet poll fired immediately on launch, which (with no backend set)
+  hit a relative `/api/panes` and returned 404 — flagged by the Even Hub review. The glasses now
+  show a "set up on your phone" prompt until a backend is configured, then start polling.
+
+## 1.0.36 — 2026-07-06
+- **Herdr sessions now show their real names.** They were showing the project folder name
+  (e.g. every session in one repo looked identical); the list now shows each session's actual
+  Claude name (its `/rename` title or auto-name), resolved from the session record.
+- **Crash diagnostics.** Uncaught app errors are now captured and shown on the Setup screen (and
+  logged to your backend) instead of the app silently quitting — so an instability can be reported
+  and fixed. (Investigating a reported quit/scroll issue in herdr session views.)
+
 ## 1.0.35 — 2026-07-06
 - **Finished sessions stay pinned on top.** When a working session completes (working → idle) it no
   longer drops back into the idle pack — it pins in a "done" band at the top of the list, marked »,
