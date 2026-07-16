@@ -109,6 +109,9 @@ class HerdrSourceTests(unittest.TestCase):
 
         self.assertEqual(self.source.session_label(codex), "codex")
 
+    def test_herdr_uses_live_terminal_as_authoritative_view(self):
+        self.assertTrue(self.source.live_terminal_view)
+
 
 if __name__ == "__main__":
     unittest.main()

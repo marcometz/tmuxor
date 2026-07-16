@@ -22,6 +22,7 @@ Run:  python conductor_api.py
 Bind: defaults to your Tailscale IP (tailscale ip -4), port 8790.
 Env:  CONDUCTOR_TOKEN (optional bearer), CONDUCTOR_API_PORT, CONDUCTOR_BIND.
 """
+import hashlib
 import hmac
 import json
 import os
@@ -88,6 +89,7 @@ def pane_view(src, p):
         "agent": p.get("agent") or p.get("command") or "",
         "is_claude": p["is_claude"],
         "is_conductor": p["is_conductor"],
+        "view_mode": "terminal" if getattr(src, "live_terminal_view", False) or not p["is_claude"] else "conversation",
     }
 
 
@@ -383,6 +385,21 @@ class Handler(BaseHTTPRequestHandler):
             p = find_pane(src, unquote(m.group(1)))
             if not p:
                 return self._json(404, {"error": "no such pane"})
+            # Herdr owns the current terminal buffer. A recognized agent may run in
+            # Docker, where its transcript is unavailable on the host. Never fall
+            # back to an unrelated "newest transcript in this cwd": return the live
+            # pane instead, also keeping older TMUXor clients correct.
+            if getattr(src, "live_terminal_view", False):
+                text = src.capture_pane(p["pane_id"], 200)
+                working = _pane_status(src, p) == "working"
+                etag = "terminal-" + hashlib.sha256((text + str(working)).encode()).hexdigest()[:24]
+                if q.get("etag", [""])[0] == etag:
+                    return self._json(200, {"id": p["pane_id"], "notModified": True, "etag": etag})
+                turns = [{"role": "assistant", "text": text}] if text.strip() else []
+                return self._json(200, {
+                    "id": p["pane_id"], "turns": turns, "working": working, "etag": etag,
+                    "view_mode": "terminal",
+                })
             sess = src.resolve_session(p)
             if sess is not None:
                 # exact session identified: use ITS transcript. jsonl=None means a

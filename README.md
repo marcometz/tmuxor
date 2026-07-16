@@ -100,6 +100,9 @@ gestures**, reassigned per screen (each screen shows a hint of what they do):
   Claude. Text is sent exactly as typed, which works with Codex, Claude in Docker, shells,
   REPLs and other CLI/TUI apps. An optional Translate mode converts natural language into
   one shell command and requires an Anthropic API key on the backend.
+- **Current Herdr output** — Herdr panes, including Docker-wrapped Claude sessions, are
+  rendered from Herdr's live terminal buffer. Host-side Claude transcripts are never
+  substituted for a container session.
 - **Approving a command** — when a session asks to run something, you **read the full command on
   the glasses first** (swipe through it), then tap to choose, swipe to Yes/No, tap to confirm.
   You never approve something you can't see.

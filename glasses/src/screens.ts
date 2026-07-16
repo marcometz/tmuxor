@@ -11,7 +11,7 @@ import { isConfigured } from './config'
 
 export interface Ctx {
   exitApp: () => void
-  openPane: (n: string, label: string, isClaude: boolean, cwd: string, listIndex: number) => void
+  openPane: (n: string, label: string, isClaude: boolean, viewMode: 'conversation' | 'terminal', cwd: string, listIndex: number) => void
   closePane: () => void
   scrollDetail: (dir: 'up' | 'down') => void
   scrollMenu: (dir: 'up' | 'down') => void
@@ -146,7 +146,7 @@ const listScreen: GlassScreen<AppState, Ctx> = {
       if (nav.highlightedIndex === 0) { ctx.startNewSession(); return { screen: 'new', highlightedIndex: 0 } }
       const p = s.panes[nav.highlightedIndex - 1]
       if (p) {
-        ctx.openPane(p.n, p.label, p.is_claude, p.cwd, nav.highlightedIndex)
+        ctx.openPane(p.n, p.label, p.is_claude, p.view_mode || (p.is_claude ? 'conversation' : 'terminal'), p.cwd, nav.highlightedIndex)
         return { screen: 'detail', highlightedIndex: 0 }
       }
     }
@@ -377,7 +377,7 @@ const newScreen: GlassScreen<AppState, Ctx> = {
     if (s.newPhase === 'done') {
       if (a.type === 'SELECT_HIGHLIGHTED' && s.newPaneN) {
         const p = s.panes.find((x) => x.n === s.newPaneN)
-        ctx.openPane(s.newPaneN, p?.label || 'new', true, p?.cwd || s.newPath, 0)
+        ctx.openPane(s.newPaneN, p?.label || 'new', true, p?.view_mode || 'terminal', p?.cwd || s.newPath, 0)
         return { screen: 'detail', highlightedIndex: 0 }
       }
       if (a.type === 'GO_BACK') { ctx.cancelNewSession(); return { screen: 'list', highlightedIndex: 0 } }

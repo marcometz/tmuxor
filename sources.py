@@ -96,6 +96,7 @@ class TmuxSource:
     tmux_conductor functions, so the tmux path is byte-identical to before."""
     name = "tmux"
     native_status = False  # status is inferred (glyph + on-screen prompt regex)
+    live_terminal_view = False  # Claude panes may use their host transcript files
 
     def list_panes(self, claude_only=False):
         return tc.list_panes(claude_only=claude_only)
@@ -211,6 +212,9 @@ class HerdrSource:
     shell pid, and maps herdr's native agent_status onto our status vocab."""
     name = "herdr"
     native_status = True  # herdr reports agent state directly; no regex inference
+    # Herdr is the authoritative terminal stream, especially when the agent runs
+    # inside Docker and its transcript files do not exist on the host.
+    live_terminal_view = True
 
     # --- CLI plumbing ---
     # herdr's CLI is mixed: metadata commands (list/get/create/close) print a JSON

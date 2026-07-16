@@ -41,6 +41,7 @@ export interface Pane {
   agent: string
   is_claude: boolean
   is_conductor: boolean
+  view_mode: 'conversation' | 'terminal'
   done?: boolean  // client-only: set once a session goes working->idle, until it's opened — pins it in a top "done" band
 }
 

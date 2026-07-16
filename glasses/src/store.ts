@@ -24,6 +24,7 @@ export interface AppState {
   activePaneN: string | null
   activeLabel: string
   activeIsClaude: boolean
+  activeViewMode: 'conversation' | 'terminal'
   activeCwd: string
   lines: string[]
   menu: MenuState | null
@@ -62,7 +63,7 @@ export interface AppState {
 
 let state: AppState = {
   panes: [], loading: true, error: null, listIndex: 0,
-  activePaneN: null, activeLabel: '', activeIsClaude: false, activeCwd: '',
+  activePaneN: null, activeLabel: '', activeIsClaude: false, activeViewMode: 'terminal', activeCwd: '',
   lines: [], menu: null, menuPhase: 'read', menuBody: [], menuScroll: 0, menuFreeText: false, scroll: 0, atBottom: true, working: false, activity: '', voiceOn: true, voiceChecked: [], asleep: false,
   phase: 'view', draft: '', draftKind: null, busy: false, status: '', typingText: '', draftLines: [], confirmScroll: 0, lastCost: 0, totalCost: 0,
   newPhase: 'tag', newText: '', newTags: [], newTagIndex: 0, newTag: '', newPath: '', newCreate: false, newStatus: '', newPaneN: null,
@@ -494,13 +495,13 @@ function updateLive(text: string) {
 function closeStream() { if (es) { es.close(); es = null } }
 function stopAnswers() { if (answersTimer) { clearInterval(answersTimer); answersTimer = null } }
 
-export function openPane(n: string, label: string, isClaude: boolean, cwd: string, listIndex: number) {
+export function openPane(n: string, label: string, isClaude: boolean, viewMode: 'conversation' | 'terminal', cwd: string, listIndex: number) {
   closeStream(); stopAnswers()
   if (finished.delete(n)) repaintPanes()  // opening a finished session acknowledges it -> unpin from the "done" band
   convoLines = []
-  set({ activePaneN: n, activeLabel: label, activeIsClaude: isClaude, activeCwd: cwd, listIndex,
+  set({ activePaneN: n, activeLabel: label, activeIsClaude: isClaude, activeViewMode: viewMode, activeCwd: cwd, listIndex,
         lines: ['…'], menu: null, menuPhase: 'read', menuBody: [], menuScroll: 0, menuFreeText: false, scroll: 0, atBottom: true, working: false, activity: '', phase: 'view', draft: '', draftKind: null, status: '', typingText: '' })
-  if (isClaude) {
+  if (isClaude && viewMode === 'conversation') {
     const mem = paneMem.get(n)
     jumpToPrompt = !mem            // first time -> latest question
     pendingRestore = mem ?? null   // returning -> resume where they left off
@@ -522,7 +523,7 @@ export function closePane() {
   // remember where they left this pane (claude panes only). "scrolled away" = they manually
   // scrolled anywhere in this view; a reopen then RESUMES there. If they never scrolled (just
   // read the jumped-to latest prompt), a reopen re-anchors on the latest prompt.
-  if (state.activePaneN && state.activeIsClaude) {
+  if (state.activePaneN && state.activeIsClaude && state.activeViewMode === 'conversation') {
     paneMem.set(state.activePaneN, { scroll: state.scroll, atBottom: state.atBottom, promptCount: convoPromptCount, scrolledAway: userScrolled })
     // Closing counts as having SEEN this session. The fleet poll is paused while a pane is open, so
     // prevStatus still holds the pre-open value ('working'); without this, the first post-close poll
@@ -598,7 +599,7 @@ export function jumpToLatest(): boolean {
   // OR down into its answer) -> bring that prompt to the TOP. scroll may exceed the normal bottom
   // (ms) so even a short last exchange lands prompt-first (the view display + buildView allow this
   // over-scroll). Shell panes have no prompt marker, and "already on the prompt" -> live edge.
-  if (state.activeIsClaude) {
+  if (state.activeViewMode === 'conversation') {
     const promptPos = lastPromptIndex(state.lines)
     if (state.scroll !== promptPos) { set({ scroll: promptPos, atBottom: false }); return true }
     // already ON the prompt AND it's at/past the live edge (nothing below) -> the prompt stage and
@@ -773,9 +774,9 @@ export async function sendNow() {
     await sendToPane(n, state.draft, true)
     // "working…" only applies to a Claude pane (it's processing your prompt); a shell pane has no such
     // state, so setting working:true + buildView would clobber its live screen with a permanent '⋯'.
-    const claude = state.activeIsClaude
-    set({ phase: 'view', atBottom: true, working: claude, busy: false, status: '', draft: '', draftKind: null })
-    if (claude) buildView()
+    const conversation = state.activeIsClaude && state.activeViewMode === 'conversation'
+    set({ phase: 'view', atBottom: true, working: conversation, busy: false, status: '', draft: '', draftKind: null })
+    if (conversation) buildView()
   } catch { set({ busy: false, status: 'send failed — tap to retry' }) }
 }
 
@@ -838,7 +839,12 @@ export async function submitTypedInput() {
     if (state.activeIsClaude) {
       const n = state.activePaneN
       set({ busy: true, status: 'sending…' })
-      try { await sendToPane(n, t, true); set({ phase: 'view', atBottom: true, working: true, busy: false, status: '', draft: '', draftKind: null }); buildView() }
+      try {
+        await sendToPane(n, t, true)
+        const conversation = state.activeViewMode === 'conversation'
+        set({ phase: 'view', atBottom: true, working: conversation, busy: false, status: '', draft: '', draftKind: null })
+        if (conversation) buildView()
+      }
       catch { set({ busy: false, status: 'send failed — try again' }) }
     } else {
       await handleTranscript(t)  // shell pane: translate -> confirm review
