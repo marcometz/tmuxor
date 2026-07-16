@@ -26,6 +26,13 @@ export interface Pane {
   window: number
   window_name: string
   pane_index: number
+  space_id?: string
+  space_number?: number
+  space_label?: string
+  tab_id?: string
+  tab_number?: number
+  tab_label?: string
+  tab_panes?: number
   title: string
   label: string
   tag: string

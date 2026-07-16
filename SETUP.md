@@ -164,9 +164,10 @@ tmux path's screen inference.
 - **To default the backend to Herdr** (no picker needed), set `CONDUCTOR_SOURCE=herdr`.
 - Your Claude sessions must actually run **inside** Herdr for it to see them (Herdr replaces
   tmux; it doesn't manage an existing tmux server).
-- TMUXor lists every Herdr pane. Recognized agents get Herdr's native status; Docker
-  wrappers and ordinary terminals still appear and remain controllable with Direct input,
-  even when Herdr labels their state `unknown`.
+- TMUXor lists every Herdr space, tab and pane as a `space / tab / pane` path.
+  Recognized agents get Herdr's native status; Docker wrappers and ordinary terminals
+  still appear and remain controllable with Direct input, even when Herdr labels their
+  state `unknown`.
 
 ---
 

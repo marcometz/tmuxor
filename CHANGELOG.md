@@ -6,6 +6,11 @@ project memory; this file is the short "what changed" for each build.
 > Builds: TMUXor ships as a single **public** `.ehpk` — it bakes no secrets, so every user
 > enters their own backend URL + token on the app's Setup screen.
 
+## 1.1.1 — 2026-07-16
+- **Complete Herdr hierarchy:** the fleet now carries and displays every Herdr space,
+  tab and pane as `space / tab / pane`. Agent recognition only enriches status and
+  labels; it never filters terminals, servers, consoles, REPLs or unrecognized panes.
+
 ## 1.1.0 — 2026-07-16
 - **macOS backend installation:** `install.sh` now installs a persistent `launchd`
   LaunchAgent on macOS while retaining systemd user services on Linux. It automatically

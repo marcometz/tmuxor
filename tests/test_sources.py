@@ -11,6 +11,7 @@ class FakeHerdrSource(sources.HerdrSource):
                     {
                         "pane_id": "w1:p1",
                         "workspace_id": "w1",
+                        "tab_id": "w1:t2",
                         "cwd": "/projects/api",
                         "focused": True,
                         "agent": "claude",
@@ -19,6 +20,7 @@ class FakeHerdrSource(sources.HerdrSource):
                     {
                         "pane_id": "w1:p2",
                         "workspace_id": "w1",
+                        "tab_id": "w1:t1",
                         "cwd": "/projects/api",
                         "focused": False,
                         "agent": "codex",
@@ -27,6 +29,7 @@ class FakeHerdrSource(sources.HerdrSource):
                     {
                         "pane_id": "w1:p3",
                         "workspace_id": "w1",
+                        "tab_id": "w1:t1",
                         "cwd": "/projects/api",
                         "focused": False,
                         "agent_status": "unknown",
@@ -44,6 +47,27 @@ class FakeHerdrSource(sources.HerdrSource):
                     }
                 ]
             }
+        if args[:2] == ["tab", "list"]:
+            return {
+                "tabs": [
+                    {
+                        "tab_id": "w1:t1",
+                        "workspace_id": "w1",
+                        "number": 1,
+                        "label": "shells",
+                        "pane_count": 2,
+                        "focused": False,
+                    },
+                    {
+                        "tab_id": "w1:t2",
+                        "workspace_id": "w1",
+                        "number": 2,
+                        "label": "coding-session",
+                        "pane_count": 1,
+                        "focused": True,
+                    },
+                ]
+            }
         raise AssertionError(f"unexpected Herdr command: {args}")
 
 
@@ -56,6 +80,17 @@ class HerdrSourceTests(unittest.TestCase):
 
         self.assertEqual([p["pane_id"] for p in panes], ["w1:p1", "w1:p2", "w1:p3"])
         self.assertEqual([p["agent"] for p in panes], ["claude", "codex", ""])
+
+    def test_space_tab_and_pane_hierarchy_is_preserved(self):
+        panes = self.source.list_panes(claude_only=False)
+
+        self.assertEqual(panes[0]["window_name"], "api")
+        self.assertEqual(panes[0]["tab_id"], "w1:t2")
+        self.assertEqual(panes[0]["tab_name"], "coding-session")
+        self.assertEqual(panes[0]["tab_index"], 2)
+        self.assertEqual(panes[1]["tab_name"], "shells")
+        self.assertEqual(panes[1]["pane_index"], 0)
+        self.assertEqual(panes[2]["pane_index"], 1)
 
     def test_claude_filter_remains_available_for_legacy_clients(self):
         panes = self.source.list_panes(claude_only=True)

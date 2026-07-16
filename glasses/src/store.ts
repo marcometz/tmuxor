@@ -99,7 +99,9 @@ function decorateAndSort(raw: Pane[]): Pane[] {
   return raw
     .map((p) => ({ ...p, done: finished.has(p.n) }))
     .sort((a, b) => (ORDER[a.done ? 'done' : a.status] ?? 9) - (ORDER[b.done ? 'done' : b.status] ?? 9)
-                    || a.window - b.window || a.pane_index - b.pane_index)
+                    || (a.space_number ?? a.window) - (b.space_number ?? b.window)
+                    || (a.tab_number ?? 0) - (b.tab_number ?? 0)
+                    || a.pane_index - b.pane_index)
 }
 // Re-decorate + re-sort the CURRENT panes against `finished` and push if changed — reflects an
 // openPane clear immediately (the list poll only runs while no pane is open, so it can lag 5s).

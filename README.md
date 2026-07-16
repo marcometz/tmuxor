@@ -85,10 +85,11 @@ gestures**, reassigned per screen (each screen shows a hint of what they do):
 
 > **tap** = the primary action · **double-tap** = back · **swipe up/down** = move / scroll
 
-- **The fleet** — all panes, including agents, shells and servers, sorted by what needs you:
+- **The fleet** — all panes, including agents, shells and servers, sorted by what needs you.
+  Herdr entries show their complete `space / tab / pane` path:
   **!** waiting on you · **●** working
   · **○** idle, with **finished** sessions (`»`) pinned on top until you open them. Each row is
-  `tag  title` (the tag is the tmux window / Herdr workspace / project). Swipe to scroll
+  The tag is the tmux window / Herdr workspace / project. Swipe to scroll
   (**▶** marks the selected row), tap to open. The top row, **＋ new session**, starts a new one.
 - **Reading a session** — opens at the latest question. Swipe to scroll the real prompts and
   replies. **Double-tap** walks you back toward the live edge — latest prompt → bottom → out to

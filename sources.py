@@ -266,15 +266,23 @@ class HerdrSource:
     def list_panes(self, claude_only=False):
         raw = self._json(["pane", "list"]).get("panes", [])
         wsmap = {}
+        tabmap = {}
         try:
             for w in self._json(["workspace", "list"]).get("workspaces", []):
                 wsmap[w["workspace_id"]] = w
         except Exception:
             pass
+        try:
+            for t in self._json(["tab", "list"]).get("tabs", []):
+                tabmap[t["tab_id"]] = t
+        except Exception:
+            pass
         out = []
         for rp in raw:
             ws = rp.get("workspace_id", "")
+            tab = rp.get("tab_id", "")
             wmeta = wsmap.get(ws, {})
+            tmeta = tabmap.get(tab, {})
             agent = rp.get("agent") or ""
             is_claude = agent == "claude"
             out.append({
@@ -287,6 +295,11 @@ class HerdrSource:
                 "window_active": bool(wmeta.get("focused")),
                 "command": agent,
                 "agent": agent,
+                "tab_id": tab,
+                "tab_index": tmeta.get("number", 0),
+                "tab_name": tmeta.get("label", "") or tab,
+                "tab_active": bool(tmeta.get("focused")),
+                "tab_panes": tmeta.get("pane_count", 0),
                 "pid": None,                                  # lazy (process-info) — see _ensure_pid
                 "path": rp.get("cwd", "") or rp.get("foreground_cwd", ""),
                 "title": rp.get("title") or rp.get("display_agent") or rp.get("name") or "",
@@ -295,11 +308,14 @@ class HerdrSource:
                 "_agent_status": rp.get("agent_status", "unknown"),
                 "_sid": (rp.get("agent_session") or {}).get("value"),  # Claude sessionId -> real name
             })
-        # stable pane_index within each window (workspace) for a deterministic sort tiebreak
+        # Stable pane_index within each tab. Herdr's hierarchy is
+        # workspace (space) -> tab -> pane; agent detection is metadata only and
+        # must never decide whether a terminal is present in the fleet.
         counter = defaultdict(int)
-        for p in sorted(out, key=lambda p: (p["window_index"], p["pane_id"])):
-            p["pane_index"] = counter[p["window_index"]]
-            counter[p["window_index"]] += 1
+        for p in sorted(out, key=lambda p: (p["window_index"], p["tab_index"], p["pane_id"])):
+            parent = p["tab_id"] or p["session"]
+            p["pane_index"] = counter[parent]
+            counter[parent] += 1
         if claude_only:
             out = [p for p in out if p["is_claude"]]
         return out
@@ -358,6 +374,8 @@ class HerdrSource:
             return p["title"]
         if p.get("agent"):
             return p["agent"]
+        if p.get("tab_name"):
+            return p["tab_name"]
         base = os.path.basename((p.get("path") or "").rstrip("/"))
         return base or p.get("command") or "session"
 

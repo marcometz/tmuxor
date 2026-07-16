@@ -42,6 +42,16 @@ const clip = (s: string, n: number) => (s.length <= n ? s : s.slice(0, n - 1) + 
 const DETAIL_SLOTS = 9
 const VIEW_SLOTS = 9  // conversation/shell view: header (with scroll/position) + 9 content, no footer (must match store VIEW_SLOTS)
 
+function panePath(p: Pane): string {
+  const space = p.space_label || p.tag
+  const tab = p.tab_label || ''
+  const parts = [space]
+  if (tab && tab !== space) parts.push(tab)
+  if (p.label && p.label !== tab && p.label !== space) parts.push(p.label)
+  else if ((p.tab_panes ?? 0) > 1) parts.push(`pane ${p.pane_index + 1}`)
+  return parts.filter(Boolean).join(' / ')
+}
+
 function wrap(s: string, n: number): string[] {
   const out: string[] = []
   let r = s
@@ -115,11 +125,12 @@ const listScreen: GlassScreen<AppState, Ctx> = {
       items,
       highlightedIndex: nav.highlightedIndex,
       maxVisible: VIS,
-      // tag (project) first — it's the disambiguator across ~35 sessions; only the long title clips.
+      // Show Herdr's full space / tab / pane hierarchy. Agent recognition only enriches the
+      // final label; plain terminals, servers and REPLs remain first-class fleet rows.
       // ▶ marks the selected row by TEXT (columns page mode flattens the line highlight style); the
       // 3-space else keeps rows aligned. Marker is inside truncateGlassText so width still fits ~568px.
       formatter: (it, i) =>
-        truncateGlassText(`${i === nav.highlightedIndex ? '▶ ' : '   '}${it ? `${it.done ? '»' : (GLYPH[it.status] ?? '·')} ${it.tag}  ${it.label}` : '＋ new session'}`),
+        truncateGlassText(`${i === nav.highlightedIndex ? '▶ ' : '   '}${it ? `${it.done ? '»' : (GLYPH[it.status] ?? '·')} ${panePath(it)}` : '＋ new session'}`),
     })
     return { lines: [...glassHeader(`PANELS ${s.panes.length} · p${page}/${pages}`, bar), ...list] }
   },
