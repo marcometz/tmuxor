@@ -11,6 +11,7 @@ const LS_OPENAI_PATH = 'conductor.openaiKeyPath' // optional PATH to the OpenAI 
 const LS_IDLE_SEC = 'conductor.idleSleepSec'     // seconds the glasses HUD stays on before sleeping (0 = always on)
 const LS_WAKE_CHANGE = 'conductor.wakeOnChange'  // wake the HUD when a session changes (working -> done / needs-input)
 const LS_SOURCE = 'conductor.source'             // which backend multiplexer to drive: '' = backend default, else 'tmux'|'herdr'
+const LS_TERMINAL_INPUT = 'conductor.terminalInput' // non-Claude panes: send literal input or translate natural language to a shell command
 const PERSIST_KEY = 'conductor.config'           // single key in the phone app's persistent store
 const PERSONAL = !!import.meta.env.VITE_PERSONAL  // personal build only
 
@@ -37,11 +38,15 @@ export function getWakeOnChange(): boolean { return localStorage.getItem(LS_WAKE
 // otherwise 'tmux' | 'herdr'. Sent as ?source= on every backend call; the backend gates on
 // what it actually has (advertised via /api/health) and falls back to its default if absent.
 export function getSource(): string { return localStorage.getItem(LS_SOURCE) || '' }
+export type TerminalInputMode = 'direct' | 'translate'
+export function getTerminalInputMode(): TerminalInputMode {
+  return localStorage.getItem(LS_TERMINAL_INPUT) === 'translate' ? 'translate' : 'direct'
+}
 
 function persist() {
   const c = getConfig()
   waitForEvenAppBridge()
-    .then((b) => b.setLocalStorage(PERSIST_KEY, JSON.stringify({ base: c.base, token: c.token, projectsDir: getProjectsDir(), openaiKeyPath: getOpenaiKeyPath(), idleSleepSec: getIdleSleepSec(), wakeOnChange: getWakeOnChange(), source: getSource() })))
+    .then((b) => b.setLocalStorage(PERSIST_KEY, JSON.stringify({ base: c.base, token: c.token, projectsDir: getProjectsDir(), openaiKeyPath: getOpenaiKeyPath(), idleSleepSec: getIdleSleepSec(), wakeOnChange: getWakeOnChange(), source: getSource(), terminalInput: getTerminalInputMode() })))
     .catch(() => {})
 }
 
@@ -55,6 +60,7 @@ export function setOpenaiKeyPath(p: string) { localStorage.setItem(LS_OPENAI_PAT
 export function setIdleSleepSec(n: number) { localStorage.setItem(LS_IDLE_SEC, String(Math.max(0, Math.floor(n) || 0))); persist() }
 export function setWakeOnChange(on: boolean) { localStorage.setItem(LS_WAKE_CHANGE, on ? '1' : '0'); persist() }
 export function setSource(s: string) { localStorage.setItem(LS_SOURCE, (s || '').trim()); persist() }
+export function setTerminalInputMode(mode: TerminalInputMode) { localStorage.setItem(LS_TERMINAL_INPUT, mode); persist() }
 
 export function isConfigured(): boolean { const c = getConfig(); return !!c.base && !!c.token }
 
@@ -78,6 +84,7 @@ export async function loadPersistedConfig(): Promise<void> {
         if (c.idleSleepSec != null) localStorage.setItem(LS_IDLE_SEC, String(c.idleSleepSec))
         if (c.wakeOnChange != null) localStorage.setItem(LS_WAKE_CHANGE, c.wakeOnChange ? '1' : '0')
         if (c.source) localStorage.setItem(LS_SOURCE, c.source)
+        if (c.terminalInput === 'translate') localStorage.setItem(LS_TERMINAL_INPUT, 'translate')
       }
     }
   } catch { /* no bridge / nothing stored -> Setup screen */ }

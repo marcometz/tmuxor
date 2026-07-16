@@ -161,7 +161,7 @@ const detailScreen: GlassScreen<AppState, Ctx> = {
     if (s.phase === 'listening') {
       return { lines: [
         ...glassHeader(title, s.typingText ? 'TYPING' : (s.voiceOn ? 'LISTENING' : 'TYPE ON PHONE')),
-        line('● ' + (s.typingText ? truncateGlassText(s.typingText) : (s.status || (s.voiceOn ? `Speak your ${s.activeIsClaude ? 'message' : 'command'}…` : 'Type it on your phone…'))), 'normal'),
+        line('● ' + (s.typingText ? truncateGlassText(s.typingText) : (s.status || (s.voiceOn ? `Speak your ${s.activeIsClaude ? 'message' : 'input'}…` : 'Type it on your phone…'))), 'normal'),
         line('', 'meta'),
         line(s.voiceOn ? 'Tap when done · type on phone · ◀◀ cancels' : 'Type on your phone · ◀◀ cancels', 'meta'),
       ] }
@@ -176,7 +176,7 @@ const detailScreen: GlassScreen<AppState, Ctx> = {
       const win = s.draftLines.slice(top, top + slots)
       const up = top > 0 ? '▲' : ' '
       const dn = top + slots < total ? '▼' : ' '
-      const label = s.activeIsClaude ? 'You said' : 'Will run'
+      const label = s.activeIsClaude ? 'You said' : (s.draftKind === 'command' ? 'Will run' : 'Will send')
       const out = [line(`${label} ${up}${dn}  tap=SEND ◀◀=redo`, 'normal'), ...win.map((l) => line(l, 'meta'))]
       if (s.status) out.push(line(s.status, 'meta')) // surface send/translate failures
       return { lines: out }

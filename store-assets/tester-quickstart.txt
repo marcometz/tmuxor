@@ -10,4 +10,4 @@ Run a fleet of Claude Code sessions on your computer? TMUXor puts them on your g
 
 Controls: tap = do · double-tap = back · swipe = move/scroll.
 
-Setup (one time): full guide at github.com/liyiyuian/tmuxor — run install.sh on your computer, then paste the printed config code into the app. Needs tmux + Claude Code + Tailscale.
+Setup (one time): full guide at github.com/marcometz/tmuxor — run install.sh on your computer, then paste the printed config code into the app. Needs tmux or Herdr + Tailscale.

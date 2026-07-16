@@ -1,13 +1,13 @@
 # TMUXor — Setup Guide
 
-TMUXor turns your **Even G2 glasses** into a hands-free conductor for the **Claude Code
-(and shell) sessions running in tmux or [Herdr](https://herdr.dev/)**: see which session
-needs you, read the conversation, and reply by voice — all from the glasses, over your
-Tailscale network.
+TMUXor turns your **Even G2 glasses** into a hands-free conductor for agents, shells,
+REPLs and other CLI/TUI programs running in tmux or [Herdr](https://herdr.dev/): see
+which pane needs you, read its output, and send input by voice or phone keyboard over
+your Tailscale network.
 
 It has two halves:
 
-- **Backend** (`conductor_api.py` + `tmux_conductor.py`) — runs on **your computer**, reads
+- **Backend** (`conductor_api.py` + `tmux_conductor.py` + `sources.py`) — runs on **your computer**, reads
   your tmux + Claude Code sessions, and exposes a small token-authenticated HTTP API.
 - **Glasses app** (`glasses/`) — an Even Hub plugin (web app) you install on your glasses;
   it talks to your backend over Tailscale.
@@ -23,14 +23,16 @@ On the **computer** that runs your sessions:
 - `tmux` with your Claude Code / shell sessions in one tmux **session** (default name `0`)
   — **or** [Herdr](https://herdr.dev/) (an agent-aware multiplexer) hosting them instead.
   See §2d to enable/select Herdr; if you only use tmux, ignore it.
-- [Claude Code](https://claude.com/claude-code) installed (the app reads its session files).
+- *(Optional)* [Claude Code](https://claude.com/claude-code), Codex, or another CLI
+  agent. Claude conversation transcripts get a richer reading view; all other panes use
+  their live terminal output.
 - **Python 3.10+** (no pip packages needed — the backend uses only the standard library + the `tmux` or `herdr` CLI).
 - **Tailscale** installed and logged in.
 - *(Optional)* an **OpenAI API key** — enables voice→text via Whisper. Without it, voice is
   off and you type your replies on the phone instead; everything else still works.
-- *(Optional)* an **Anthropic API key** — only used to translate speech→shell command for
-  non-Claude (plain shell) panes. Claude panes don't need it.
-- **Node 18+ / npm** (only to build the glasses app once).
+- *(Optional)* an **Anthropic API key** — only used when Setup's terminal-input mode is
+  set to Translate. Direct input is the default and needs no Anthropic key.
+- **Node 22.22+ / npm** (only to build the glasses app once).
 
 On the **phone**:
 - The **Even** app, your **G2 glasses + R1 ring** paired, **Developer mode** enabled, and
@@ -76,6 +78,29 @@ Notes:
 
 ### 2b. Run it as a service (auto-start, auto-restart)
 
+The recommended installer creates the correct service for the current platform:
+
+```bash
+TMUXOR_SRC="$PWD" bash install.sh
+```
+
+On Linux it creates a systemd user service. On macOS it creates
+`~/Library/LaunchAgents/com.tmuxor.conductor.plist`; logs are written to
+`~/Library/Logs/TMUXor/`. Login autostart is disabled by default on macOS; the
+installer still starts the backend for the current login session. Manage it manually with:
+
+```bash
+~/.local/share/tmuxor/tmuxor-service.sh start
+~/.local/share/tmuxor/tmuxor-service.sh stop
+~/.local/share/tmuxor/tmuxor-service.sh restart
+~/.local/share/tmuxor/tmuxor-service.sh status
+```
+
+To opt into automatic startup at login during installation, set
+`TMUXOR_AUTOSTART=1`.
+
+For a manual Linux/systemd setup:
+
 ```bash
 # adjust the two paths: your python, and where you put this repo
 mkdir -p ~/.config/systemd/user
@@ -105,7 +130,7 @@ systemctl --user status tmux-conductor      # should be "active (running)"
 Quick local check (replace the token):
 
 ```bash
-curl -s -H "Authorization: Bearer $CONDUCTOR_TOKEN" http://127.0.0.1:8790/api/panes?claude_only=1 | head -c 300
+curl -s -H "Authorization: Bearer $CONDUCTOR_TOKEN" http://127.0.0.1:8790/api/panes?claude_only=0 | head -c 300
 # no token -> 401 ;  with token -> a JSON list of panes
 ```
 
@@ -115,12 +140,12 @@ The backend stays bound to `127.0.0.1`; Tailscale publishes it as HTTPS **inside
 tailnet only** (not the public internet):
 
 ```bash
-sudo tailscale serve --bg 8790
+tailscale serve --bg 8790
 tailscale serve status      # shows your https URL, e.g. https://<host>.<tailnet>.ts.net
 ```
 
 Copy that **HTTPS URL** — you'll enter it in the glasses app. (If `serve` needs sudo every
-time, run `sudo tailscale set --operator=$USER` once.)
+time on Linux, run `sudo tailscale set --operator=$USER` once.)
 
 ### 2d. (Optional) Use Herdr instead of / alongside tmux
 
@@ -132,12 +157,16 @@ tmux path's screen inference.
 - **Nothing to configure to detect it:** if the `herdr` server is running, `/api/health`
   advertises it and the phone **Setup** screen shows a backend picker (**Auto · tmux ·
   herdr**). Pick one; the choice is sent per request and gated on what's actually installed.
-- **If `herdr` isn't found:** the `systemd --user` service `PATH` often omits `~/.local/bin`
-  (where Herdr installs), so set its full path in the env file:
-  `CONDUCTOR_HERDR_BIN=/home/you/.local/bin/herdr`, then `systemctl --user restart tmux-conductor`.
+- **If `herdr` isn't found:** background-service `PATH` values are intentionally minimal,
+  so set its full path in the env file, for example
+  `CONDUCTOR_HERDR_BIN=/opt/homebrew/bin/herdr` on macOS or
+  `/home/you/.local/bin/herdr` on Linux. Then restart the service.
 - **To default the backend to Herdr** (no picker needed), set `CONDUCTOR_SOURCE=herdr`.
 - Your Claude sessions must actually run **inside** Herdr for it to see them (Herdr replaces
   tmux; it doesn't manage an existing tmux server).
+- TMUXor lists every Herdr pane. Recognized agents get Herdr's native status; Docker
+  wrappers and ordinary terminals still appear and remain controllable with Direct input,
+  even when Herdr labels their state `unknown`.
 
 ---
 

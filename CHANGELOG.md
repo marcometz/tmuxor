@@ -6,6 +6,19 @@ project memory; this file is the short "what changed" for each build.
 > Builds: TMUXor ships as a single **public** `.ehpk` — it bakes no secrets, so every user
 > enters their own backend URL + token on the app's Setup screen.
 
+## 1.1.0 — 2026-07-16
+- **macOS backend installation:** `install.sh` now installs a persistent `launchd`
+  LaunchAgent on macOS while retaining systemd user services on Linux. It automatically
+  selects an installed Python 3.10+ (including Homebrew Python), supports Herdr-only
+  machines, and installs the previously omitted `sources.py`.
+- **Every terminal pane on the glasses:** the fleet no longer filters out shells, servers,
+  REPLs, Docker-wrapped agents, Codex, or other non-Claude panes. Recognized Herdr agents
+  retain native working/blocked/idle state.
+- **Direct terminal input:** non-Claude panes now default to sending exactly what the user
+  types or dictates. The previous natural-language-to-shell-command translation remains an
+  optional Setup mode.
+- The fork uses its own `com.marcometz.tmuxor` package ID and repository install URL.
+
 ## 1.0.37 — 2026-07-09
 - **Review fix:** the app no longer makes any network request before you've entered your backend
   URL + token. Previously the fleet poll fired immediately on launch, which (with no backend set)

@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react'
-import { getConfig, setConfig, getProjectsDir, setProjectsDir, getOpenaiKeyPath, setOpenaiKeyPath, getIdleSleepSec, setIdleSleepSec, getWakeOnChange, setWakeOnChange, getSource, setSource } from './config'
+import { getConfig, setConfig, getProjectsDir, setProjectsDir, getOpenaiKeyPath, setOpenaiKeyPath, getIdleSleepSec, setIdleSleepSec, getWakeOnChange, setWakeOnChange, getSource, setSource, getTerminalInputMode, setTerminalInputMode, type TerminalInputMode } from './config'
 import { listPanes, health } from './api'
 import { subscribe, getSnapshot, resetForSourceChange } from './store'
 
@@ -27,6 +27,7 @@ export function Setup({ onSave }: { onSave: () => void }) {
   const [idleSec, setIdleSec] = useState(String(getIdleSleepSec()))
   const [wakeChange, setWakeChange] = useState(getWakeOnChange())
   const [source, setSrc] = useState(getSource())
+  const [terminalInput, setTerminalInput] = useState<TerminalInputMode>(getTerminalInputMode())
   const [sources, setSources] = useState<string[]>([])   // what the backend can serve
   const [defSource, setDefSource] = useState('')          // the backend's own default
   const [err, setErr] = useState('')
@@ -63,6 +64,7 @@ export function Setup({ onSave }: { onSave: () => void }) {
     setIdleSleepSec(Number(idleSec) || 0)
     setWakeOnChange(wakeChange)
     setSource(source)
+    setTerminalInputMode(terminalInput)
     try {
       await listPanes()
       refreshSources()   // now that the connection is proven, learn what backends it offers
@@ -136,6 +138,22 @@ export function Setup({ onSave }: { onSave: () => void }) {
 
       <label style={label} htmlFor="cfg-projects">Projects folder (optional) — where new sessions are created</label>
       <input id="cfg-projects" style={input} value={projects} onChange={(e) => { setProjects(e.target.value); setErr('') }} placeholder="~/projects (default)" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
+
+      <label style={label}>Terminal input — for shells and agents not identified as Claude</label>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {([
+          ['direct', 'Direct — send exactly what I type'],
+          ['translate', 'Translate — natural language → shell command'],
+        ] as [TerminalInputMode, string][]).map(([mode, text]) => (
+          <button key={mode} type="button" onClick={() => { setTerminalInput(mode); setTerminalInputMode(mode) }}
+            style={{ ...chip, ...(terminalInput === mode ? chipOn : {}) }}>
+            {text}
+          </button>
+        ))}
+      </div>
+      <p style={{ color: '#6f8a7b', fontSize: 12, margin: '6px 0 0' }}>
+        Direct works with Codex, Claude in Docker, REPLs and arbitrary CLI/TUI programs. Translate requires an Anthropic API key on the backend.
+      </p>
 
       <label style={label} htmlFor="cfg-keypath">OpenAI key file (optional) — for voice. Auto-found in env/~/.env; set a path only if elsewhere</label>
       <input id="cfg-keypath" style={input} value={keyPath} onChange={(e) => { setKeyPath(e.target.value); setErr('') }} placeholder="e.g. ~/.config/openai/key" autoCapitalize="off" autoCorrect="off" spellCheck={false} />

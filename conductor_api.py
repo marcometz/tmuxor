@@ -78,6 +78,7 @@ def pane_view(src, p):
         "tag": src.window_tag(p),
         "status": _pane_status(src, p),
         "cwd": p["path"],
+        "agent": p.get("agent") or p.get("command") or "",
         "is_claude": p["is_claude"],
         "is_conductor": p["is_conductor"],
     }

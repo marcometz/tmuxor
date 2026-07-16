@@ -275,7 +275,8 @@ class HerdrSource:
         for rp in raw:
             ws = rp.get("workspace_id", "")
             wmeta = wsmap.get(ws, {})
-            is_claude = rp.get("agent") == "claude"
+            agent = rp.get("agent") or ""
+            is_claude = agent == "claude"
             out.append({
                 "pane_id": rp["pane_id"],
                 "session": ws,
@@ -284,10 +285,11 @@ class HerdrSource:
                 "pane_index": 0,                              # assigned below
                 "pane_active": bool(rp.get("focused")),
                 "window_active": bool(wmeta.get("focused")),
-                "command": rp.get("agent") or "",
+                "command": agent,
+                "agent": agent,
                 "pid": None,                                  # lazy (process-info) — see _ensure_pid
                 "path": rp.get("cwd", "") or rp.get("foreground_cwd", ""),
-                "title": "",                                  # herdr pane list carries no task title
+                "title": rp.get("title") or rp.get("display_agent") or rp.get("name") or "",
                 "is_conductor": False,                        # the API runs as a service, not inside a pane
                 "is_claude": is_claude,
                 "_agent_status": rp.get("agent_status", "unknown"),
@@ -339,7 +341,9 @@ class HerdrSource:
         return {"pane_id": target, "keys": keylist}
 
     def session_status(self, p):
-        if not p.get("is_claude"):
+        # Herdr provides native state for every recognized agent, not only Claude.
+        # Plain shells/unrecognized Docker wrappers remain "other".
+        if not p.get("agent"):
             return "other"
         return _HERDR_STATUS.get(p.get("_agent_status", "unknown"), "idle")
 
@@ -350,6 +354,10 @@ class HerdrSource:
             nm = self._claude_name(p)
             if nm:
                 return nm
+        if p.get("title"):
+            return p["title"]
+        if p.get("agent"):
+            return p["agent"]
         base = os.path.basename((p.get("path") or "").rstrip("/"))
         return base or p.get("command") or "session"
 

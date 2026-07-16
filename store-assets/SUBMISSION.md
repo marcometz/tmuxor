@@ -5,7 +5,7 @@ this folder. Agent supplies the text/images; you do the portal steps.
 
 ## 0. Create the project (do this first)
 - **Create a BRAND-NEW project** on hub.evenrealities.com.
-- **Package ID:** `com.liyiyuian.tmuxor` (must match the build's `app.json`).
+- **Package ID:** `com.marcometz.tmuxor` (must match the build's `app.json`).
 - **Upload build:** the latest `glasses/TMUXor-*.ehpk` (highest version number) — the only build;
   it bakes no secrets, so every user enters their own backend URL + token in the app's Setup screen.
 - Uninstall any old "tmux Conductor / TMUXor" build first (it was a different package id).

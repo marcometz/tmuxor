@@ -31,12 +31,13 @@ export interface Pane {
   tag: string
   status: 'waiting' | 'working' | 'idle' | 'other'
   cwd: string
+  agent: string
   is_claude: boolean
   is_conductor: boolean
   done?: boolean  // client-only: set once a session goes working->idle, until it's opened — pins it in a top "done" band
 }
 
-export async function listPanes(claudeOnly = true): Promise<Pane[]> {
+export async function listPanes(claudeOnly = false): Promise<Pane[]> {
   const r = await fetch(`${base()}/api/panes${qs(`claude_only=${claudeOnly ? 1 : 0}`, srcParam())}`, { headers: authHeaders() })
   if (!r.ok) throw new Error(`listPanes ${r.status}`)
   return (await r.json()).panes
@@ -96,7 +97,7 @@ export async function sendKeys(n: string, keys: string[]): Promise<void> {
   if (!r.ok) throw new Error(`sendKeys ${r.status}`)
 }
 
-// For a non-Claude (shell) pane: turn a spoken description into a shell command.
+// Optional legacy mode for a non-Claude pane: turn a spoken description into a shell command.
 export async function translate(description: string, cwd: string): Promise<string> {
   const r = await fetch(`${base()}/api/translate`, {
     method: 'POST',

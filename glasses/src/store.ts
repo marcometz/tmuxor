@@ -4,7 +4,7 @@
 import { listPanes, paneScreen, paneConversation, streamPane, sendToPane, sendKeys, translate, transcribe, resolveFolder, newSession, listWindows, health, type Pane, type Turn } from './api'
 import { GlassBridgeSource } from 'even-toolkit/stt'
 import { getTextWidth } from 'even-toolkit/pretext'
-import { getIdleSleepSec, getWakeOnChange, isConfigured } from './config'
+import { getIdleSleepSec, getTerminalInputMode, getWakeOnChange, isConfigured } from './config'
 
 export type Phase = 'view' | 'listening' | 'confirm'
 const SLOTS = 9
@@ -40,7 +40,7 @@ export interface AppState {
   asleep: boolean    // glasses HUD blanked after inactivity (idle screen-sleep)
   phase: Phase
   draft: string
-  draftKind: 'prompt' | 'command' | null
+  draftKind: 'prompt' | 'command' | 'input' | null
   busy: boolean
   status: string
   typingText: string  // live text being typed on the phone (echoed to the glasses)
@@ -116,7 +116,7 @@ export async function refresh() {
   if (!isConfigured()) { if (state.loading || state.error) set({ loading: false, error: null }); return }
   const gen = fleetGen
   try {
-    const raw = await listPanes(true)
+    const raw = await listPanes(false)
     if (gen !== fleetGen) return // source changed while this poll was in flight -> stale namespace
     const present = new Set(raw.map((p) => p.n))
     for (const n of finished) if (!present.has(n)) finished.delete(n)  // pane gone -> drop the mark
@@ -672,7 +672,7 @@ export async function submitMenu() {
   try { await sendKeys(n, ['Enter']) } catch { /* SSE will resync */ }
 }
 
-// --- voice: glasses mic -> WAV -> server Whisper -> prompt/command ---
+// --- voice: glasses mic -> WAV -> server Whisper -> prompt/terminal input ---
 let mic: GlassBridgeSource | null = null
 let micUnsub: (() => void) | null = null
 let pcm: Float32Array[] = []
@@ -750,11 +750,14 @@ async function handleTranscript(t: string) {
   if (state.activeIsClaude) {
     set({ draft: t, draftKind: 'prompt', phase: 'confirm', busy: false, status: '' })
     setConfirmLines()
-  } else {
+  } else if (getTerminalInputMode() === 'translate') {
     set({ phase: 'confirm', draftKind: 'command', draft: '', busy: true, status: 'translating…' })
     try { set({ draft: await translate(t, state.activeCwd), busy: false, status: '' }); setConfirmLines() }
     // don't strand a raw-English "command" on the SEND screen — go back to retry
     catch { set({ phase: 'listening', draft: '', draftKind: null, busy: false, status: 'translate failed — tap to retry' }); beginMic() }
+  } else {
+    set({ draft: t, draftKind: 'input', phase: 'confirm', busy: false, status: '' })
+    setConfirmLines()
   }
 }
 
